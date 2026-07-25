@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v17';
+const FF_VERSION = 'FF v18';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -861,6 +861,25 @@ function wireUi() {
     const from = mePos || { x: cv.clientWidth / 2, y: cv.clientHeight * 0.9 };
     motes.push({ from, to: { x: h.x, y: h.y }, born: performance.now(), dur: 600, dim: !on });
     buzz();
+  });
+
+  // ---- PWA install: Chrome/Android give us a prompt to defer; iOS never
+  //      prompts (no Apple API) — the button shows Add-to-Home-Screen steps.
+  let deferredPrompt = null;
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    if (!standalone) $('#install').hidden = false;
+  });
+  window.addEventListener('appinstalled', () => {
+    $('#install').hidden = true;
+    game.log('Firefly Island now lives on your home screen ✨');
+  });
+  if (/iphone|ipad|ipod/i.test(navigator.userAgent) && !standalone) $('#install').hidden = false;
+  $('#install').addEventListener('click', () => {
+    if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt = null; $('#install').hidden = true; }
+    else $('#iosTip').hidden = !$('#iosTip').hidden;
   });
 
   // --- drag your own firefly (position becomes realm state via presence.spot)
