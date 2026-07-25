@@ -40,7 +40,7 @@ main { flex: 1; display: flex; flex-direction: column; }
 
 /* play */
 #play { flex: 1; display: flex; flex-direction: column; }
-#island { flex: 1; width: 100%; min-height: 46dvh; display: block; touch-action: manipulation; }
+#island { flex: 1; width: 100%; min-height: 46dvh; display: block; touch-action: none; }
 #hud { padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; }
 #mylamp {
   align-self: center; padding: 6px 14px; border-radius: 999px;

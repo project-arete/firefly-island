@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v9';
+const FF_VERSION = 'FF v10';
 const DEFAULT_HOST = 'bali.aretehosting.com';
 const DEFAULT_PORT = 443;
 const P_LIGHT = 'padi.light';
@@ -277,10 +277,17 @@ const game = new (class extends Emitter {
       const [, sysId, nodeId] = m;
       const fkey = `${sysId}/${nodeId}`;
       const presBase = `cns/${sysId}/nodes/${nodeId}/contexts/${this.ctxId}/provider/${P_PRES}`;
+      const spotRaw = keys[`${presBase}/properties/spot`];
+      let spot = null;
+      if (spotRaw) {
+        const [sx, sy] = String(spotRaw).split(',').map(Number);
+        if (Number.isFinite(sx) && Number.isFinite(sy)) spot = { x: sx, y: sy };
+      }
       roster.set(fkey, {
         key: fkey, sysId, nodeId,
         name: keys[`${presBase}/properties/name`] || keys[`cns/${sysId}/nodes/${nodeId}/name`] || 'a firefly',
         color: keys[`${presBase}/properties/color`] || '#ffe178',
+        spot, // realm-declared position (CP v2); null = hash-seat fallback
         lampOn: keys[`cns/${sysId}/nodes/${nodeId}/contexts/${this.ctxId}/consumer/${P_LIGHT}/properties/cState`] === '1',
         isMe: fkey === meKey,
         connId: null, litByMe: false,
@@ -468,6 +475,14 @@ const game = new (class extends Emitter {
     catch (e) { this.log(`✗ Feed failed: ${e.message || e}`); }
   }
 
+  // Publish my position as realm state (presence CP v2 `spot`, propagates).
+  async pushSpot(s) {
+    if (!this.client || !this.client.isOpen() || !this.#declared) return;
+    const v = `${s.x.toFixed(3)},${s.y.toFixed(3)}`;
+    try { await this.client.put(`${this.#base('provider', P_PRES)}/properties/spot`, v); }
+    catch (_) {}
+  }
+
   shareUrl() {
     const u = new URL(location.href);
     u.search = '';
@@ -504,6 +519,15 @@ function posFor(key, i, n, W, H) {
   const rx = W * 0.30 + (h % 37) / 37 * W * 0.08;
   const ry = H * 0.20 + (h % 23) / 23 * H * 0.06;
   return { x: W / 2 + Math.cos(angle) * rx, y: H * 0.52 + Math.sin(angle) * ry };
+}
+
+// Realm-declared spot wins; local drag override wins harder; hash-seat fallback.
+let dragSpot = null;
+function flyPos(f, i, n, W, H) {
+  let s = f.spot;
+  if (f.isMe && dragSpot) s = dragSpot;
+  if (s) return { x: s.x * W, y: s.y * H };
+  return posFor(f.key, i, n, W, H);
 }
 
 let hit = [];
@@ -629,7 +653,7 @@ function draw() {
   drawBeacon(g, W, H, t); // also registers the beacon's tap region in `hit`
   const flies = game.fireflies;
   flies.forEach((f, i) => {
-    const { x, y } = posFor(f.key, i, flies.length, W, H);
+    const { x, y } = flyPos(f, i, flies.length, W, H);
     const bob = Math.sin(t * 1.4 + i * 2.1) * 3;
     const yy = y + bob;
     const on = f.lampOn;
@@ -637,7 +661,7 @@ function draw() {
     if (!f.isMe && f.connId) {
       const me = flies.find((m) => m.isMe);
       if (me) {
-        const mp = posFor(me.key, flies.indexOf(me), flies.length, W, H);
+        const mp = flyPos(me, flies.indexOf(me), flies.length, W, H);
         g.strokeStyle = 'rgba(120,180,255,0.10)';
         g.lineWidth = 1;
         g.beginPath(); g.moveTo(mp.x, mp.y); g.lineTo(x, yy); g.stroke();
@@ -767,7 +791,47 @@ function wireUi() {
     buzz();
   });
 
-  $('#island').addEventListener('click', (e) => {
+  // --- drag your own firefly (position becomes realm state via presence.spot)
+  const cv = $('#island');
+  let dragging = false, dragMoved = false, suppressClick = false;
+  let lastSpotPush = 0, dragClearTimer = null;
+  const norm = (e) => {
+    const r = cv.getBoundingClientRect();
+    return {
+      x: Math.min(0.97, Math.max(0.03, (e.clientX - r.left) / r.width)),
+      y: Math.min(0.92, Math.max(0.12, (e.clientY - r.top) / r.height)),
+    };
+  };
+  cv.addEventListener('pointerdown', (e) => {
+    const r = cv.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    const mine = hit.find((h) => h.isMe && (x - h.x) ** 2 + (y - h.y) ** 2 <= (h.r * 1.4) ** 2);
+    if (!mine) return;
+    dragging = true; dragMoved = false;
+    if (dragClearTimer) { clearTimeout(dragClearTimer); dragClearTimer = null; }
+    cv.setPointerCapture(e.pointerId);
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    dragMoved = true;
+    dragSpot = norm(e);
+    const now = performance.now();
+    if (now - lastSpotPush > 250) { lastSpotPush = now; game.pushSpot(dragSpot); }
+  });
+  cv.addEventListener('pointerup', (e) => {
+    if (!dragging) return;
+    dragging = false;
+    if (dragMoved) {
+      suppressClick = true;
+      dragSpot = norm(e);
+      game.pushSpot(dragSpot);
+      // keep the local override briefly while the realm echo catches up
+      dragClearTimer = setTimeout(() => { dragSpot = null; }, 1500);
+    }
+  });
+
+  cv.addEventListener('click', (e) => {
+    if (suppressClick) { suppressClick = false; return; }
     const r = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
     for (const h of hit) {
