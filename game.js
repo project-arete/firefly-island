@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v36';
+const FF_VERSION = 'FF v37';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -661,7 +661,9 @@ function drawMotes(g, W, H) {
     const p = (now - m.born) / m.dur;
     const e = 1 - (1 - p) * (1 - p); // ease-out
     const x = m.from.x + (to.x - m.from.x) * e;
-    const y = m.from.y + (to.y - m.from.y) * e - Math.sin(p * Math.PI) * 40; // gentle arc
+    const y = m.from.y + (to.y - m.from.y) * e
+      - Math.sin(p * Math.PI) * (m.fail ? 24 : 40)          // gentle arc
+      + (m.fail ? Math.max(0, p - 0.6) * 90 : 0);           // spent sparks droop
     const [core, glowC] = m.dim
       ? ['#b9c6e8', 'rgba(150,170,220,0.7)']
       : ['#fff3c4', 'rgba(255,236,160,0.95)'];
@@ -672,7 +674,7 @@ function drawMotes(g, W, H) {
     g.beginPath(); g.arc(x, y, 12, 0, Math.PI * 2); g.fill();
     g.fillStyle = core;
     g.beginPath(); g.arc(x, y, 2.5, 0, Math.PI * 2); g.fill();
-    if (p > 0.96 && !m.landed) { m.landed = true; rings.push({ x: to.x, y: to.y, at: now, dim: m.dim }); }
+    if (p > 0.96 && !m.landed) { m.landed = true; rings.push({ x, y, at: now, dim: m.dim || m.fail }); }
   }
   rings = rings.filter((r) => now - r.at < 600);
   for (const r of rings) {
@@ -1054,8 +1056,20 @@ function wireUi() {
     const x = e.clientX - r.left, y = e.clientY - r.top;
     for (const h of hit) {
       if ((x - h.x) ** 2 + (y - h.y) ** 2 > h.r ** 2) continue;
-      if (!h.inReach) { // too far: a fizzle where you aimed, and a hint
-        rings.push({ x: h.x, y: h.y, at: performance.now(), dim: true });
+      if (!h.inReach) {
+        // too far: your spark launches anyway and DIES at the edge of your
+        // zone — falling visibly short says "out of reach" better than words
+        if (mePos) {
+          const W = e.currentTarget.clientWidth, H = e.currentTarget.clientHeight;
+          const dx = h.x - mePos.x, dy = h.y - mePos.y;
+          const nd = Math.hypot(dx / W, dy / H);
+          const t = nd > 0 ? (h.beacon ? BEACON_REACH : myReach()) / nd : 0;
+          motes.push({
+            from: { ...mePos },
+            to: { x: mePos.x + dx * t, y: mePos.y + dy * t },
+            born: performance.now(), dur: 550, fail: true,
+          });
+        }
         game.log(`Too far — glide closer to ${h.name}.`);
         return;
       }
