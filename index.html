@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon-192.png" />
   <link rel="apple-touch-icon" href="icon-192.png" />
-  <link rel="stylesheet" href="firefly.css?v=33" />
+  <link rel="stylesheet" href="firefly.css?v=34" />
 </head>
 <body>
   <main>
@@ -43,6 +43,8 @@
 
       <div id="status" class="glass">…</div>
 
+      <button id="help" class="glass" aria-label="How the island works">?</button>
+
       <div id="murmurs"></div>
 
       <div id="where" class="glass" hidden>
@@ -58,6 +60,34 @@
 
       <div id="iosTip" hidden class="glass">On iPhone: tap the Share button <span class="shr">&#x2BAD;</span> in Safari, then “Add to Home Screen”.</div>
 
+      <div id="helpmodal" hidden>
+        <div class="helpcard glass">
+          <h2>How the island works</h2>
+
+          <h3>Your lamp isn't yours to light</h3>
+          <p>Only another firefly can light your lamp — and only you can light theirs. That's the whole game. Give light freely; it tends to come back.</p>
+
+          <h3>You have a zone of action</h3>
+          <p>Drag your firefly to move around the island. While you're moving, a dashed circle shows how far your glow reaches — you can only touch fireflies inside it. Glide close to someone before you tap.</p>
+          <p>Here's the secret: every firefly holding your lamp lit <em>extends your reach</em>. Light received is power to give.</p>
+
+          <h3>Lighting and letting go</h3>
+          <p>Tap a firefly in your reach to light their lamp. Tap again to let go. The little beads above a lit firefly show exactly who is holding their light — your bead wears a white ring.</p>
+          <p>A lamp stays lit as long as <em>anyone</em> holds it. If two of you hold a lamp and one lets go, it keeps burning. To darken it, everyone must let go.</p>
+
+          <h3>The lighthouse</h3>
+          <p>The beacon is the island's heart, and it slowly dims. Glide close and tap it to feed it a spark. Feed it well and the whole island celebrates.</p>
+
+          <h3>The island spirit</h3>
+          <p>Every island has an invisible keeper. It greets you when you arrive, drinks the light you feed the beacon, and never sleeps.</p>
+
+          <h3>Travel and founding</h3>
+          <p>Share shows a QR code — anyone who scans it lands on <em>this</em> island, next to you. The ⇄ button by the island's name lets you travel — or found a brand-new island and give it a name of your own.</p>
+
+          <div class="row"><button id="helpclose">Back to the island</button></div>
+        </div>
+      </div>
+
       <div id="qrmodal" hidden>
         <div class="qrcard glass">
           <h2>Bring a firefly</h2>
@@ -71,7 +101,7 @@
       </div>
     </section>
   </main>
-  <script src="qrcode.js?v=33"></script>
-  <script src="game.js?v=33"></script>
+  <script src="qrcode.js?v=34"></script>
+  <script src="game.js?v=34"></script>
 </body>
 </html>

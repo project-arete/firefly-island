@@ -134,6 +134,27 @@ main { height: 100dvh; display: flex; }
 }
 #iosTip .shr { color: var(--blue); }
 
+/* --------------------------------------------------------------- help */
+#help {
+  position: absolute; top: calc(12px + var(--st)); right: 14px;
+  width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
+  font-size: 15px; font-weight: 600; color: var(--blue);
+  display: flex; align-items: center; justify-content: center;
+}
+#helpmodal {
+  position: fixed; inset: 0; background: rgba(3, 5, 15, 0.8);
+  display: flex; align-items: center; justify-content: center; z-index: 10;
+}
+.helpcard {
+  width: min(92vw, 420px); max-height: 80dvh; overflow-y: auto;
+  padding: 22px 24px; text-align: left;
+}
+.helpcard h2 { margin: 0 0 4px; font-size: 19px; }
+.helpcard h3 { margin: 18px 0 4px; font-size: 14px; color: var(--gold); }
+.helpcard p { margin: 6px 0; font-size: 13.5px; color: var(--ink); line-height: 1.55; }
+.helpcard em { color: var(--blue); font-style: normal; }
+.helpcard .row { margin-top: 18px; }
+
 /* ----------------------------------------------------------- QR modal */
 #qrmodal {
   position: fixed; inset: 0; background: rgba(3, 5, 15, 0.8);

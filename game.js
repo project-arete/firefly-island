@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v33';
+const FF_VERSION = 'FF v34';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -950,6 +950,9 @@ function wireUi() {
   $('#name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#join').click(); });
   $('#hop').addEventListener('click', () => { game.leave(); refresh(); }); // back to the gate = change island
   $('#share').addEventListener('click', showQr);
+  $('#help').addEventListener('click', () => { $('#helpmodal').hidden = false; });
+  $('#helpclose').addEventListener('click', () => { $('#helpmodal').hidden = true; });
+  $('#helpmodal').addEventListener('click', (e) => { if (e.target === e.currentTarget) $('#helpmodal').hidden = true; });
   $('#qrclose').addEventListener('click', () => { $('#qrmodal').hidden = true; });
   $('#qrcopy').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(game.shareUrl()); $('#qrcopy').textContent = 'Copied!'; }
