@@ -17,7 +17,16 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v10';
+const FF_VERSION = 'FF v17';
+// Reach: how far your glow extends, in normalized (0-1) canvas units.
+// Light received is power to give: every firefly holding your lamp lit
+// extends your reach. The base must stay workable alone (cold-start guard),
+// and the beacon stays reachable at a FIXED radius — the social safety net.
+const REACH_BASE = 0.22;
+const REACH_PER_SPARK = 0.05;
+const REACH_MAX = 0.40;
+const BEACON_REACH = 0.34;
+const myReach = () => Math.min(REACH_MAX, REACH_BASE + REACH_PER_SPARK * game.litBy.length);
 const DEFAULT_HOST = 'bali.aretehosting.com';
 const DEFAULT_PORT = 443;
 const P_LIGHT = 'padi.light';
@@ -407,6 +416,21 @@ const game = new (class extends Emitter {
         if (m[4] === 'consumer') { const p = String(keys[k]).split('/'); w.to = `${p[1]}/${p[3]}`; }
         else w.sOut = keys[k];
       }
+      // who holds each lamp lit — drives blaze AND the visible holder beads
+      for (const id in wires) {
+        const w = wires[id];
+        if (w.sOut === '1' && w.to && w.from !== w.to) {
+          const target = roster.get(w.to);
+          const holder = roster.get(w.from);
+          if (target) {
+            target.held = (target.held || 0) + 1;
+            (target.holders || (target.holders = [])).push({
+              color: holder ? holder.color : '#ffe178',
+              isMe: w.from === meKey,
+            });
+          }
+        }
+      }
       const first = this.#lastSOut === null;
       const last = first ? {} : this.#lastSOut;
       const cur = {};
@@ -507,7 +531,7 @@ function fictionLine() {
     case 'joining': return 'Your firefly is finding its way to the island…';
     case 'alone': return 'The island is quiet. Share the link — lamps need friends.';
     case 'waiting': return 'Fireflies nearby! The island spirits are wiring the lanterns…';
-    case 'live': return game.myLampOn ? 'Your lamp is LIT. Return the favor?' : 'Tap a firefly to light their lamp.';
+    case 'live': return game.myLampOn ? 'Your lamp is LIT. Return the favor?' : 'Glide close to a firefly, then tap to light their lamp.';
     case 'error': return game.lastError || 'Something went wrong.';
     default: return '';
   }
@@ -523,6 +547,7 @@ function posFor(key, i, n, W, H) {
 
 // Realm-declared spot wins; local drag override wins harder; hash-seat fallback.
 let dragSpot = null;
+let isDragging = false; // reach halo shows only while actively moving
 function flyPos(f, i, n, W, H) {
   let s = f.spot;
   if (f.isMe && dragSpot) s = dragSpot;
@@ -564,12 +589,13 @@ function drawBeacon(g, W, H, t) {
   }
   g.fillStyle = lv > 0.05 ? '#ffe89a' : '#3a4666';
   g.beginPath(); g.arc(bx, byTop - 12, 4, 0, Math.PI * 2); g.fill();
-  // the beacon IS the feed button
+  // the beacon IS the feed button — when your glow reaches it
   if (b.connId) {
-    g.fillStyle = 'rgba(255,225,120,0.5)';
-    g.font = '11px system-ui, sans-serif'; g.textAlign = 'center';
-    g.fillText('tap to feed ✦', bx, byBase + 16);
-    hit.push({ x: bx, y: byTop - 12, r: 34, beacon: true });
+    const near = !mePos || Math.hypot((bx - mePos.x) / W, (byTop - 12 - mePos.y) / H) <= BEACON_REACH;
+    g.fillStyle = near ? 'rgba(255,225,120,0.8)' : 'rgba(255,225,120,0.45)';
+    g.font = '12px system-ui, sans-serif'; g.textAlign = 'center';
+    g.fillText(near ? 'tap to feed ✦' : 'glide closer to feed ✦', bx, byBase + 18);
+    hit.push({ x: bx, y: byTop - 12, r: 34, beacon: true, inReach: near, name: 'the beacon' });
   }
 }
 
@@ -657,6 +683,22 @@ function draw() {
     const bob = Math.sin(t * 1.4 + i * 2.1) * 3;
     const yy = y + bob;
     const on = f.lampOn;
+    if (f.isMe) mePos = { x, y: yy }; // current-frame (I sort first in the roster)
+    const reach = myReach(); // grows with every firefly holding my lamp lit
+    const inReach = f.isMe || !mePos ||
+      Math.hypot((x - mePos.x) / W, (yy - mePos.y) / H) <= reach;
+
+    if (f.isMe && isDragging) {
+      // my reach — the visible scope of my powers, shown while moving
+      g.fillStyle = 'rgba(140,200,255,0.05)';
+      g.beginPath(); g.ellipse(x, yy, reach * W, reach * H, 0, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = `rgba(140,200,255,${0.25 + 0.08 * Math.sin(t * 2)})`;
+      g.lineWidth = 1.5;
+      g.setLineDash([6, 8]);
+      g.lineDashOffset = -((t * 20) % 14);
+      g.beginPath(); g.ellipse(x, yy, reach * W, reach * H, 0, 0, Math.PI * 2); g.stroke();
+      g.setLineDash([]); g.lineDashOffset = 0;
+    }
 
     if (!f.isMe && f.connId) {
       const me = flies.find((m) => m.isMe);
@@ -669,21 +711,52 @@ function draw() {
     }
 
     if (on) {
-      const glow = g.createRadialGradient(x, yy, 2, x, yy, 34);
-      glow.addColorStop(0, hexA(f.color, 0.85));
+      // blaze scales with how many switches hold this lamp, + gentle flicker
+      const flick = 1 + 0.05 * Math.sin(t * 5 + i * 1.7);
+      const gr = (34 + 10 * Math.min((f.held || 1) - 1, 3) + 8) * flick;
+      const glow = g.createRadialGradient(x, yy, 2, x, yy, gr);
+      glow.addColorStop(0, hexA(f.color, 0.95));
+      glow.addColorStop(0.35, hexA(f.color, 0.5));
       glow.addColorStop(1, hexA(f.color, 0));
       g.fillStyle = glow;
-      g.beginPath(); g.arc(x, yy, 34, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.arc(x, yy, gr, 0, Math.PI * 2); g.fill();
+      g.fillStyle = 'rgba(255,255,240,0.95)'; // white-hot core
+      g.beginPath(); g.arc(x, yy, 3, 0, Math.PI * 2); g.fill();
     }
-    g.fillStyle = on ? f.color : '#3a4666';
-    g.beginPath(); g.arc(x, yy, on ? 6 : 5, 0, Math.PI * 2); g.fill();
+    if (on) {
+      g.fillStyle = f.color;
+      g.beginPath(); g.arc(x, yy, 7, 0, Math.PI * 2); g.fill();
+    } else {
+      // truly off: no glow, no color — just a white-outlined firefly
+      g.fillStyle = '#0d1430';
+      g.beginPath(); g.arc(x, yy, 5, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = 'rgba(255,255,255,0.85)';
+      g.lineWidth = 1.5;
+      g.beginPath(); g.arc(x, yy, 5, 0, Math.PI * 2); g.stroke();
+    }
     if (f.isMe) {
       g.strokeStyle = 'rgba(140,200,255,0.9)'; g.lineWidth = 1.5;
       g.beginPath(); g.arc(x, yy, 10, 0, Math.PI * 2); g.stroke();
     }
-    if (!f.isMe && f.litByMe) {
-      g.strokeStyle = hexA(f.color, 0.7); g.lineWidth = 1;
-      g.beginPath(); g.arc(x, yy, 10, 0, Math.PI * 2); g.stroke();
+    // holder beads: one per switch holding this lamp, in the holder's color;
+    // mine is white-ringed — so everyone always sees exactly who holds whom
+    if (f.holders && f.holders.length) {
+      f.holders.forEach((h2, j) => {
+        const a = -Math.PI / 2 + (j - (f.holders.length - 1) / 2) * 0.55;
+        const bx2 = x + Math.cos(a) * 14, by2 = yy + Math.sin(a) * 14;
+        g.fillStyle = h2.color;
+        g.beginPath(); g.arc(bx2, by2, 3, 0, Math.PI * 2); g.fill();
+        if (h2.isMe) {
+          g.strokeStyle = '#fff'; g.lineWidth = 1.2;
+          g.beginPath(); g.arc(bx2, by2, 4.4, 0, Math.PI * 2); g.stroke();
+        }
+      });
+    }
+    if (!f.isMe && f.connId && inReach) {
+      // within my powers: a soft pulsing ring in their color
+      g.strokeStyle = hexA(f.color, 0.32 + 0.12 * Math.sin(t * 3 + i));
+      g.lineWidth = 1.2;
+      g.beginPath(); g.arc(x, yy, 15 + Math.sin(t * 3 + i) * 1.5, 0, Math.PI * 2); g.stroke();
     }
 
     g.fillStyle = f.isMe ? '#9cc9ff' : (f.connId ? '#d8e2f5' : 'rgba(216,226,245,0.45)');
@@ -691,8 +764,7 @@ function draw() {
     g.fillText(f.isMe ? `${f.name} (you)` : f.name, x, yy + 24);
     if (!f.isMe && !f.connId) g.fillText('…drifting closer…', x, yy + 38);
 
-    if (f.isMe) mePos = { x, y: yy };
-    hit.push({ x, y: yy, r: 22, key: f.key, isMe: f.isMe, bound: !!f.connId });
+    hit.push({ x, y: yy, r: 22, key: f.key, isMe: f.isMe, bound: !!f.connId, inReach, name: f.name });
   });
 
   drawMotes(g, W, H);
@@ -807,7 +879,7 @@ function wireUi() {
     const x = e.clientX - r.left, y = e.clientY - r.top;
     const mine = hit.find((h) => h.isMe && (x - h.x) ** 2 + (y - h.y) ** 2 <= (h.r * 1.4) ** 2);
     if (!mine) return;
-    dragging = true; dragMoved = false;
+    dragging = true; isDragging = true; dragMoved = false;
     if (dragClearTimer) { clearTimeout(dragClearTimer); dragClearTimer = null; }
     cv.setPointerCapture(e.pointerId);
   });
@@ -820,7 +892,7 @@ function wireUi() {
   });
   cv.addEventListener('pointerup', (e) => {
     if (!dragging) return;
-    dragging = false;
+    dragging = false; isDragging = false;
     if (dragMoved) {
       suppressClick = true;
       dragSpot = norm(e);
@@ -836,6 +908,11 @@ function wireUi() {
     const x = e.clientX - r.left, y = e.clientY - r.top;
     for (const h of hit) {
       if ((x - h.x) ** 2 + (y - h.y) ** 2 > h.r ** 2) continue;
+      if (!h.inReach) { // too far: a fizzle where you aimed, and a hint
+        rings.push({ x: h.x, y: h.y, at: performance.now(), dim: true });
+        game.log(`Too far — glide closer to ${h.name}.`);
+        return;
+      }
       if (h.beacon) { game.feed(); return; }
       if (!h.isMe && h.bound) { game.toggle(h.key); return; }
     }
