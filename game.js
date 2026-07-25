@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v30';
+const FF_VERSION = 'FF v31';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -183,7 +183,7 @@ const game = new (class extends Emitter {
     return `cns/${this.me.systemId}/nodes/${this.me.nodeId}/contexts/${this.ctxId}/${role}/${profile}`;
   }
 
-  async join(name, host, color) {
+  async join(name, host, color, isle) {
     this.me.name = clean(name) || 'A firefly';
     this.me.host = cleanHost(host) || DEFAULT_HOST;
     this.me.color = COLORS.includes(color) ? color : COLORS[0];
@@ -191,9 +191,9 @@ const game = new (class extends Emitter {
     localStorage.setItem(LS_HOST, this.me.host);
     localStorage.setItem(LS_COLOR, this.me.color);
 
-    const url = new URLSearchParams(location.search);
-    this.ctxId = cleanHost(url.get('island')) || ISLAND_CTX_ID;
-    this.ctxName = clean(url.get('name')) || ISLAND_CTX_NAME;
+    // which island: the gate's picker decides (main / from link / newly founded)
+    this.ctxId = (isle && cleanHost(isle.ctxId)) || ISLAND_CTX_ID;
+    this.ctxName = (isle && clean(isle.ctxName)) || ISLAND_CTX_NAME;
 
     if (this.client) { try { this.client.close(); } catch (_) {} this.client = null; }
     this.#joined = false; this.#declared = false;
@@ -225,6 +225,16 @@ const game = new (class extends Emitter {
     this.setState('joining');
     try { await this.#register(); } catch (e) { return this.#fail(e); }
     this.#joined = true;
+    // canonicalize the address bar: reload/refresh returns to THIS island,
+    // and copied URLs mean the same place for anyone
+    try {
+      const u = new URL(location.href);
+      u.search = '';
+      u.searchParams.set('host', this.me.host);
+      u.searchParams.set('island', this.ctxId);
+      if (this.ctxName !== ISLAND_CTX_NAME) u.searchParams.set('name', this.ctxName);
+      history.replaceState(null, '', u.toString());
+    } catch (_) {}
     this.log('Your firefly has landed. Waiting for the island to notice…');
     this.#scheduleDerive();
   }
@@ -893,11 +903,33 @@ function wireUi() {
     sw.appendChild(b);
   });
 
+  // island picker: main island / the one your link points at / found a new one
+  const linkIsle = cleanHost(url.get('island')) || null;
+  const linkName = clean(url.get('name')) || null;
+  const pick = $('#islepick');
+  const addOpt = (v, label) => { const o = document.createElement('option'); o.value = v; o.textContent = label; pick.appendChild(o); };
+  if (linkIsle && linkIsle !== 'FireflyIslandPhase1Ctx') {
+    addOpt('link', `${linkName || linkIsle} (from your link)`);
+  }
+  addOpt('main', 'Firefly Island (main)');
+  addOpt('new', '⛯ Found a new island…');
+  pick.addEventListener('change', () => {
+    $('#isleNameRow').hidden = pick.value !== 'new';
+    if (pick.value === 'new') $('#isleName').focus();
+  });
+
   $('#join').addEventListener('click', () => {
     const name = $('#name').value.trim();
     if (!name) { $('#name').focus(); return; }
     const color = (sw.querySelector('.swatch.sel') || sw.firstChild).dataset.color;
-    game.join(name, $('#host').value.trim(), color);
+    let isle = null;
+    if (pick.value === 'link') isle = { ctxId: linkIsle, ctxName: linkName };
+    else if (pick.value === 'new') {
+      const isleName = $('#isleName').value.trim();
+      if (!isleName) { $('#isleName').focus(); return; }
+      isle = { ctxId: base62(22), ctxName: isleName }; // a brand-new context = a brand-new island
+    }
+    game.join(name, $('#host').value.trim(), color, isle);
   });
   $('#name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#join').click(); });
   $('#fab').addEventListener('click', () => { $('#fan').hidden = !$('#fan').hidden; });

@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon-192.png" />
   <link rel="apple-touch-icon" href="icon-192.png" />
-  <link rel="stylesheet" href="firefly.css?v=30" />
+  <link rel="stylesheet" href="firefly.css?v=31" />
 </head>
 <body>
   <main>
@@ -26,6 +26,12 @@
         <summary>Island location</summary>
         <label>Realm host
           <input id="host" maxlength="64" spellcheck="false" />
+        </label>
+        <label>Island
+          <select id="islepick"></select>
+        </label>
+        <label id="isleNameRow" hidden>Name your new island
+          <input id="isleName" maxlength="24" placeholder="e.g. Moonlit Cove" />
         </label>
       </details>
       <button id="join">Fly to the island</button>
@@ -66,7 +72,7 @@
       </div>
     </section>
   </main>
-  <script src="qrcode.js?v=30"></script>
-  <script src="game.js?v=30"></script>
+  <script src="qrcode.js?v=31"></script>
+  <script src="game.js?v=31"></script>
 </body>
 </html>
