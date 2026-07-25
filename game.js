@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v34';
+const FF_VERSION = 'FF v35';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -472,7 +472,7 @@ const game = new (class extends Emitter {
           this.emit('togglefx', { from: w.from, to: w.to, on: w.sOut === '1' });
           const a = roster.get(w.from), b = roster.get(w.to);
           if (a && b && !b.isMe) {
-            this.log(w.sOut === '1' ? `${a.name} lit ${b.name}'s lamp ✨` : `${a.name} let go of ${b.name}'s lamp`);
+            this.log(w.sOut === '1' ? `${a.name} gave light to ${b.name} ✨` : `${a.name} took their light back from ${b.name}`);
           }
         }
       }
@@ -509,7 +509,7 @@ const game = new (class extends Emitter {
     this.emit('tapfx', { key: f.key, on: next === '1' }); // reward FIRST, realm truth follows
     try {
       await this.client.put(key, next);
-      this.log(next === '1' ? `You lit ${f.name}'s lamp.` : `You let go of ${f.name}'s lamp.`);
+      this.log(next === '1' ? `Your light is with ${f.name}.` : `You took your light back from ${f.name}.`);
     } catch (e) { this.log(`✗ Write failed: ${e.message || e}`); }
   }
 
