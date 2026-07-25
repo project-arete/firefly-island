@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon-192.png" />
   <link rel="apple-touch-icon" href="icon-192.png" />
-  <link rel="stylesheet" href="firefly.css?v=31" />
+  <link rel="stylesheet" href="firefly.css?v=32" />
 </head>
 <body>
   <main>
@@ -45,15 +45,14 @@
 
       <div id="murmurs"></div>
 
-      <div id="where" class="glass"></div>
+      <div id="where" class="glass" hidden>
+        <span id="whereTxt"></span>
+        <button id="hop" title="Change island">⇄</button>
+      </div>
 
       <div id="corner">
-        <div id="fan" hidden>
-          <button id="install" class="glass" hidden>Install</button>
-          <button id="share" class="glass">Share</button>
-          <button id="leave" class="glass">Leave</button>
-        </div>
-        <button id="fab" class="glass">✦</button>
+        <button id="install" class="glass" hidden>Install</button>
+        <button id="share" class="glass">Share</button>
         <div id="stamp"><span class="ffv"></span></div>
       </div>
 
@@ -72,7 +71,7 @@
       </div>
     </section>
   </main>
-  <script src="qrcode.js?v=31"></script>
-  <script src="game.js?v=31"></script>
+  <script src="qrcode.js?v=32"></script>
+  <script src="game.js?v=32"></script>
 </body>
 </html>

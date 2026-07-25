@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v31';
+const FF_VERSION = 'FF v32';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -866,7 +866,8 @@ function refresh() {
   st.classList.toggle('lit', lit);
   st.classList.toggle('error', game.state === 'error');
   // where am I: friendly island name (spirit's ctx name) over the raw address
-  $('#where').textContent = !joined ? ''
+  $('#where').hidden = !joined;
+  $('#whereTxt').textContent = !joined ? ''
     : game.islandName ? `${game.islandName} · ${game.me.host}`
     : game.me.host + (game.ctxId !== ISLAND_CTX_ID ? ` · ${game.ctxId}` : '');
 }
@@ -932,9 +933,8 @@ function wireUi() {
     game.join(name, $('#host').value.trim(), color, isle);
   });
   $('#name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#join').click(); });
-  $('#fab').addEventListener('click', () => { $('#fan').hidden = !$('#fan').hidden; });
-  $('#leave').addEventListener('click', () => { $('#fan').hidden = true; game.leave(); refresh(); });
-  $('#share').addEventListener('click', () => { $('#fan').hidden = true; showQr(); });
+  $('#hop').addEventListener('click', () => { game.leave(); refresh(); }); // back to the gate = change island
+  $('#share').addEventListener('click', showQr);
   $('#qrclose').addEventListener('click', () => { $('#qrmodal').hidden = true; });
   $('#qrcopy').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(game.shareUrl()); $('#qrcopy').textContent = 'Copied!'; }

@@ -100,31 +100,29 @@ main { height: 100dvh; display: flex; }
   100% { opacity: 0; transform: translateY(-10px); }
 }
 
-/* ------------------------------------------------- where am I (realm) */
+/* ------------------------------------- where am I (realm) + change action */
 #where {
   position: absolute; bottom: calc(16px + var(--sb)); left: 50%; transform: translateX(-50%);
-  padding: 4px 14px; font-size: 11.5px; color: var(--dim);
-  border-radius: 999px; pointer-events: none; white-space: nowrap;
+  padding: 4px 6px 4px 14px; font-size: 11.5px; color: var(--dim);
+  border-radius: 999px; white-space: nowrap;
+  display: flex; align-items: center; gap: 8px;
 }
+#hop {
+  width: 24px; height: 24px; border-radius: 50%; border: 0; cursor: pointer;
+  background: #1b2650; color: var(--blue); font-size: 13px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+#hop:active { transform: scale(.9); }
 
 /* ---------------------------------------------- panel 3: action corner */
 #corner {
   position: absolute; right: 14px; bottom: calc(14px + var(--sb));
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
 }
-#fab {
-  width: 46px; height: 46px; border-radius: 50%;
-  font-size: 19px; color: var(--gold); cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: transform .2s;
-}
-#fab:active { transform: scale(.92); }
-#fan { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
-#fan button {
+#corner button {
   padding: 9px 18px; font-size: 13.5px; font-weight: 600; cursor: pointer;
-  animation: fanin .18s ease;
 }
-@keyframes fanin { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; } }
+#corner button:active { transform: scale(.95); }
 #stamp { color: #465579; font-size: 10px; }
 
 #iosTip {
