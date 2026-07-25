@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v28';
+const FF_VERSION = 'FF v29';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -148,6 +148,7 @@ function identity() {
   return id;
 }
 const clean = (s) => String(s || '').replace(/["\\\n\r]/g, '').trim().slice(0, 24);
+const cleanHost = (s) => String(s || '').replace(/["\\\n\r\s]/g, '').trim().slice(0, 64); // hosts are longer than names
 const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // ---------------------------------------------------------------- the game
@@ -182,14 +183,14 @@ const game = new (class extends Emitter {
 
   async join(name, host, color) {
     this.me.name = clean(name) || 'A firefly';
-    this.me.host = clean(host) || DEFAULT_HOST;
+    this.me.host = cleanHost(host) || DEFAULT_HOST;
     this.me.color = COLORS.includes(color) ? color : COLORS[0];
     localStorage.setItem(LS_NAME, this.me.name);
     localStorage.setItem(LS_HOST, this.me.host);
     localStorage.setItem(LS_COLOR, this.me.color);
 
     const url = new URLSearchParams(location.search);
-    this.ctxId = clean(url.get('island')) || ISLAND_CTX_ID;
+    this.ctxId = cleanHost(url.get('island')) || ISLAND_CTX_ID;
 
     if (this.client) { try { this.client.close(); } catch (_) {} this.client = null; }
     this.#joined = false; this.#declared = false;
