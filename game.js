@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v18';
+const FF_VERSION = 'FF v20';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -557,6 +557,7 @@ function flyPos(f, i, n, W, H) {
 
 let hit = [];
 let sparks = [];
+let cursor = null; // canvas-relative pointer, for firefly excitement
 let motes = [];        // sparks of light flying from your firefly to a target
 let rings = [];        // expanding flash rings where motes land
 let mePos = null;
@@ -680,9 +681,12 @@ function draw() {
   const flies = game.fireflies;
   flies.forEach((f, i) => {
     const { x, y } = flyPos(f, i, flies.length, W, H);
-    const bob = Math.sin(t * 1.4 + i * 2.1) * 3;
-    const yy = y + bob;
     const on = f.lampOn;
+    // excitement: fireflies stir when the cursor comes near (0..1)
+    const dCur = cursor ? Math.hypot(x - cursor.x, y - cursor.y) : Infinity;
+    const excite = dCur < 120 ? 1 - dCur / 120 : 0;
+    const bob = Math.sin(t * 1.4 + i * 2.1) * 3 + Math.sin(t * 9 + i * 3.3) * 2.5 * excite;
+    const yy = y + bob;
     if (f.isMe) mePos = { x, y: yy }; // current-frame (I sort first in the roster)
     const reach = myReach(); // grows with every firefly holding my lamp lit
     const inReach = f.isMe || !mePos ||
@@ -710,18 +714,25 @@ function draw() {
       }
     }
 
+    // dock-style zoom: the whole firefly assembly magnifies as you approach,
+    // so the holder beads become readable right when you need to read them.
+    // (The reach halo stays OUTSIDE this transform — it must never lie.)
+    const s = 1 + 0.9 * excite * excite;
+    g.save();
+    g.translate(x, yy); g.scale(s, s); g.translate(-x, -yy);
+
     if (on) {
-      // blaze scales with how many switches hold this lamp, + gentle flicker
-      const flick = 1 + 0.05 * Math.sin(t * 5 + i * 1.7);
-      const gr = (34 + 10 * Math.min((f.held || 1) - 1, 3) + 8) * flick;
-      const glow = g.createRadialGradient(x, yy, 2, x, yy, gr);
-      glow.addColorStop(0, hexA(f.color, 0.95));
-      glow.addColorStop(0.35, hexA(f.color, 0.5));
+      // quiet at rest, swelling with holders and with nearby presence
+      const flick = 1 + 0.04 * Math.sin(t * 5 + i * 1.7);
+      const gr = (20 + 6 * Math.min((f.held || 1) - 1, 3)) * flick * (1 + 0.25 * excite);
+      const glow = g.createRadialGradient(x, yy, 1, x, yy, gr);
+      glow.addColorStop(0, hexA(f.color, 0.5 + 0.4 * excite));
+      glow.addColorStop(0.4, hexA(f.color, 0.22 + 0.25 * excite));
       glow.addColorStop(1, hexA(f.color, 0));
       g.fillStyle = glow;
       g.beginPath(); g.arc(x, yy, gr, 0, Math.PI * 2); g.fill();
-      g.fillStyle = 'rgba(255,255,240,0.95)'; // white-hot core
-      g.beginPath(); g.arc(x, yy, 3, 0, Math.PI * 2); g.fill();
+      g.fillStyle = `rgba(255,255,240,${0.75 + 0.2 * excite})`; // small hot core
+      g.beginPath(); g.arc(x, yy, 2.2 + excite, 0, Math.PI * 2); g.fill();
     }
     if (on) {
       g.fillStyle = f.color;
@@ -744,6 +755,8 @@ function draw() {
       f.holders.forEach((h2, j) => {
         const a = -Math.PI / 2 + (j - (f.holders.length - 1) / 2) * 0.55;
         const bx2 = x + Math.cos(a) * 14, by2 = yy + Math.sin(a) * 14;
+        g.fillStyle = '#0a1128'; // dark backing so beads read over any glow
+        g.beginPath(); g.arc(bx2, by2, 4.2, 0, Math.PI * 2); g.fill();
         g.fillStyle = h2.color;
         g.beginPath(); g.arc(bx2, by2, 3, 0, Math.PI * 2); g.fill();
         if (h2.isMe) {
@@ -763,8 +776,10 @@ function draw() {
     g.font = '12px system-ui, sans-serif'; g.textAlign = 'center';
     g.fillText(f.isMe ? `${f.name} (you)` : f.name, x, yy + 24);
     if (!f.isMe && !f.connId) g.fillText('…drifting closer…', x, yy + 38);
+    g.restore();
 
-    hit.push({ x, y: yy, r: 22, key: f.key, isMe: f.isMe, bound: !!f.connId, inReach, name: f.name });
+    // tap target grows with the zoom so the visuals never lie about the hit area
+    hit.push({ x, y: yy, r: 22 * s, key: f.key, isMe: f.isMe, bound: !!f.connId, inReach, name: f.name });
   });
 
   drawMotes(g, W, H);
@@ -903,12 +918,15 @@ function wireUi() {
     cv.setPointerCapture(e.pointerId);
   });
   cv.addEventListener('pointermove', (e) => {
+    const rr = cv.getBoundingClientRect();
+    cursor = { x: e.clientX - rr.left, y: e.clientY - rr.top };
     if (!dragging) return;
     dragMoved = true;
     dragSpot = norm(e);
     const now = performance.now();
     if (now - lastSpotPush > 250) { lastSpotPush = now; game.pushSpot(dragSpot); }
   });
+  cv.addEventListener('pointerleave', () => { cursor = null; });
   cv.addEventListener('pointerup', (e) => {
     if (!dragging) return;
     dragging = false; isDragging = false;
