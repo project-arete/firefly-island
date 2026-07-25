@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v32';
+const FF_VERSION = 'FF v33';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -381,13 +381,20 @@ const game = new (class extends Emitter {
       const m = k.match(beaconConnRe);
       if (m) { beaconConn = m[1]; break; }
     }
-    // canonical island name = the spirit's context-name key on the realm
+    // island name chain: spirit's canonical name -> any participant's
+    // non-default name (spiritless islands still know what they're called)
+    let iname = null;
     if (beaconBase) {
       const parts = beaconBase.split('/'); // [cns, sys, nodes, node, contexts, ctx, ...]
-      this.islandName = keys[`cns/${parts[1]}/nodes/${parts[3]}/contexts/${parts[5]}/name`] || null;
-    } else {
-      this.islandName = null;
+      iname = keys[`cns/${parts[1]}/nodes/${parts[3]}/contexts/${parts[5]}/name`] || null;
     }
+    if (!iname) {
+      const nameRe = new RegExp(`^cns/[^/]+/nodes/[^/]+/contexts/${ctx}/name$`);
+      for (const k in keys) {
+        if (nameRe.test(k) && keys[k] && keys[k] !== ISLAND_CTX_NAME) { iname = keys[k]; break; }
+      }
+    }
+    this.islandName = iname;
     this.beacon = {
       present: !!beaconBase,
       level: beaconBase ? Math.max(0, Math.min(100, parseInt(keys[`${beaconBase}/properties/level`] || '0', 10) || 0)) : 0,
@@ -865,11 +872,19 @@ function refresh() {
   }
   st.classList.toggle('lit', lit);
   st.classList.toggle('error', game.state === 'error');
-  // where am I: friendly island name (spirit's ctx name) over the raw address
+  // where am I: island name first-class, realm host quiet beside it
   $('#where').hidden = !joined;
-  $('#whereTxt').textContent = !joined ? ''
-    : game.islandName ? `${game.islandName} · ${game.me.host}`
-    : game.me.host + (game.ctxId !== ISLAND_CTX_ID ? ` · ${game.ctxId}` : '');
+  const wt = $('#whereTxt');
+  if (joined) {
+    const iname = game.islandName || game.ctxName;
+    wt.replaceChildren(iname);
+    const h = document.createElement('span');
+    h.className = 'whost';
+    h.textContent = ` · ${game.me.host}`;
+    wt.appendChild(h);
+  } else {
+    wt.textContent = '';
+  }
 }
 
 function showQr() {

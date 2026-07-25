@@ -107,6 +107,8 @@ main { height: 100dvh; display: flex; }
   border-radius: 999px; white-space: nowrap;
   display: flex; align-items: center; gap: 8px;
 }
+#whereTxt { color: var(--ink); }
+#whereTxt .whost { color: #566285; }
 #hop {
   width: 24px; height: 24px; border-radius: 50%; border: 0; cursor: pointer;
   background: #1b2650; color: var(--blue); font-size: 13px; line-height: 1;
