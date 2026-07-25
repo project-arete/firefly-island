@@ -1,6 +1,6 @@
 // Firefly Island service worker — network-first with cache fallback (FF v1).
-const CACHE = 'firefly-v35';
-const SHELL = ['.', 'index.html', 'firefly.css?v=35', 'game.js?v=35', 'qrcode.js?v=35', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
+const CACHE = 'firefly-v36';
+const SHELL = ['.', 'index.html', 'firefly.css?v=36', 'game.js?v=36', 'qrcode.js?v=36', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
