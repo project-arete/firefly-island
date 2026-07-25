@@ -29,23 +29,30 @@
         </label>
       </details>
       <button id="join">Fly to the island</button>
+      <div class="gstamp"><span class="ffv"></span> · a CNS/CP toy — every lamp is a governed connection</div>
     </section>
 
     <section id="play" hidden>
       <canvas id="island"></canvas>
-      <div id="hud">
-        <div id="mylamp">Your lamp is dark</div>
-        <div id="fiction"></div>
-        <div id="log"></div>
-        <div class="row">
-          <button id="install" hidden>Install ✦</button>
-          <button id="share">Share the island</button>
-          <button id="leave" class="ghost">Leave</button>
+
+      <div id="status" class="glass">…</div>
+
+      <div id="murmurs"></div>
+
+      <div id="corner">
+        <div id="fan" hidden>
+          <button id="install" class="glass" hidden>Install</button>
+          <button id="share" class="glass">Share</button>
+          <button id="leave" class="glass">Leave</button>
         </div>
-        <div id="iosTip" hidden>On iPhone: tap the Share button <span class="shr">&#x2BAD;</span> in Safari, then “Add to Home Screen”.</div>
+        <button id="fab" class="glass">✦</button>
+        <div id="stamp"><span class="ffv"></span></div>
       </div>
+
+      <div id="iosTip" hidden class="glass">On iPhone: tap the Share button <span class="shr">&#x2BAD;</span> in Safari, then “Add to Home Screen”.</div>
+
       <div id="qrmodal" hidden>
-        <div class="qrcard">
+        <div class="qrcard glass">
           <h2>Bring a firefly</h2>
           <img id="qrimg" alt="QR code for this island" />
           <div id="qrurl"></div>
@@ -57,7 +64,7 @@
       </div>
     </section>
   </main>
-  <footer><span id="ffVersion">FF v20</span> · a CNS/CP toy — every lamp is a governed connection</footer>
+  <!-- version bump: FF v23 -->
   <script src="qrcode.js"></script>
   <script src="game.js"></script>
 </body>

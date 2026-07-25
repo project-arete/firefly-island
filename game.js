@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v20';
+const FF_VERSION = 'FF v25';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -329,13 +329,13 @@ const game = new (class extends Emitter {
       if (fkey === meKey) continue; // deranked self-connection
       if (keys[`${consBase}/connections/${m[1]}/properties/sOut`] === '1') {
         const who = roster.get(fkey);
-        litBy.push(who ? who.name : 'someone');
+        litBy.push({ name: who ? who.name : 'someone', color: who ? who.color : '#ffe178' });
       }
     }
     const lampOn = litBy.length > 0;
     if (lampOn !== this.myLampOn && this.#declared && this.client.isOpen()) {
       this.client.put(`${consBase}/properties/cState`, lampOn ? '1' : '0').catch(() => {});
-      this.log(lampOn ? `✨ ${litBy.join(' and ')} lit your lamp!` : 'Your lamp went dark.');
+      this.log(lampOn ? `✨ ${litBy.map((w) => w.name).join(' and ')} lit your lamp!` : 'Your lamp went dark.');
     }
     this.myLampOn = lampOn;
     this.litBy = litBy;
@@ -508,10 +508,12 @@ const game = new (class extends Emitter {
   }
 
   shareUrl() {
+    // Always name the island fully: realm host + context id. A share link
+    // is an invitation to THIS island, wherever the app's defaults drift.
     const u = new URL(location.href);
     u.search = '';
-    if (this.ctxId !== ISLAND_CTX_ID) u.searchParams.set('island', this.ctxId);
-    if (this.me.host !== DEFAULT_HOST) u.searchParams.set('host', this.me.host);
+    u.searchParams.set('host', this.me.host);
+    u.searchParams.set('island', this.ctxId);
     return u.toString();
   }
 
@@ -569,11 +571,11 @@ function drawBeacon(g, W, H, t) {
   if (!b.present) return;
   const bx = W / 2, byTop = H * 0.40, byBase = H * 0.62;
   // tower
-  g.fillStyle = '#1a2c49';
+  g.fillStyle = '#2a3d6b';
   g.beginPath();
   g.moveTo(bx - 9, byBase); g.lineTo(bx - 5, byTop); g.lineTo(bx + 5, byTop); g.lineTo(bx + 9, byBase);
   g.closePath(); g.fill();
-  g.fillStyle = '#24406b';
+  g.fillStyle = '#3a548c';
   g.fillRect(bx - 7, byTop - 8, 14, 8);
   // light, scaled by level (+ optimistic boost while a feed awaits its ack)
   const now = performance.now();
@@ -662,8 +664,9 @@ function draw() {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   const t = performance.now() / 1000;
 
+  // twilight indigo — the blue hour (FF v24)
   const sky = g.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, '#060a1c'); sky.addColorStop(0.65, '#0b1230'); sky.addColorStop(1, '#0a1a2c');
+  sky.addColorStop(0, '#1b2150'); sky.addColorStop(0.55, '#2a2f6b'); sky.addColorStop(1, '#1d3d63');
   g.fillStyle = sky; g.fillRect(0, 0, W, H);
   let sh = 7;
   for (let i = 0; i < 40; i++) {
@@ -671,9 +674,9 @@ function draw() {
     g.fillStyle = `rgba(255,255,255,${0.2 + (sh % 60) / 100})`;
     g.fillRect((sh % W), (sh % Math.floor(H * 0.5)), 1.5, 1.5);
   }
-  g.fillStyle = '#0e2438';
+  g.fillStyle = '#20355c';
   g.beginPath(); g.ellipse(W / 2, H * 0.78, W * 0.46, H * 0.16, 0, 0, Math.PI * 2); g.fill();
-  g.fillStyle = '#123049';
+  g.fillStyle = '#2a4570';
   g.beginPath(); g.ellipse(W / 2, H * 0.74, W * 0.40, H * 0.12, 0, 0, Math.PI * 2); g.fill();
 
   hit = [];
@@ -796,11 +799,28 @@ function refresh() {
   const gate = $('#gate'), play = $('#play');
   const joined = game.state !== 'idle';
   gate.hidden = joined; play.hidden = !joined;
-  $('#fiction').textContent = fictionLine();
-  $('#fiction').classList.toggle('error', game.state === 'error');
-  const lit = game.myLampOn;
-  $('#mylamp').textContent = lit ? `Your lamp is lit — by ${game.litBy.join(' and ')}` : 'Your lamp is dark';
-  $('#mylamp').classList.toggle('lit', lit);
+  const st = $('#status');
+  const lit = game.state === 'live' && game.myLampOn;
+  const pill = (name, color) => {
+    const p = document.createElement('span');
+    p.className = 'pill';
+    p.textContent = name;
+    p.style.background = color;
+    return p;
+  };
+  if (game.state === 'live') {
+    st.replaceChildren('You are', pill(game.me.name, game.me.color));
+    if (lit) {
+      st.append('· Lit by:');
+      for (const w of game.litBy) st.append(pill(w.name, w.color));
+    } else {
+      st.append('— your lamp is dark');
+    }
+  } else {
+    st.textContent = fictionLine();
+  }
+  st.classList.toggle('lit', lit);
+  st.classList.toggle('error', game.state === 'error');
 }
 
 function showQr() {
@@ -815,7 +835,7 @@ function showQr() {
 }
 
 function wireUi() {
-  $('#ffVersion').textContent = FF_VERSION;
+  document.querySelectorAll('.ffv').forEach((el) => { el.textContent = FF_VERSION; });
   const url = new URLSearchParams(location.search);
   $('#name').value = localStorage.getItem(LS_NAME) || '';
   $('#host').value = url.get('host') || localStorage.getItem(LS_HOST) || DEFAULT_HOST;
@@ -842,8 +862,9 @@ function wireUi() {
     game.join(name, $('#host').value.trim(), color);
   });
   $('#name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#join').click(); });
-  $('#leave').addEventListener('click', () => { game.leave(); refresh(); });
-  $('#share').addEventListener('click', showQr);
+  $('#fab').addEventListener('click', () => { $('#fan').hidden = !$('#fan').hidden; });
+  $('#leave').addEventListener('click', () => { $('#fan').hidden = true; game.leave(); refresh(); });
+  $('#share').addEventListener('click', () => { $('#fan').hidden = true; showQr(); });
   $('#qrclose').addEventListener('click', () => { $('#qrmodal').hidden = true; });
   $('#qrcopy').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(game.shareUrl()); $('#qrcopy').textContent = 'Copied!'; }
@@ -957,11 +978,14 @@ function wireUi() {
 
   game.on('change', refresh);
   game.on('log', (m) => {
-    const el = $('#log');
+    // murmurs: the island narrates, then the words dissolve
+    const el = $('#murmurs');
     const line = document.createElement('div');
+    line.className = 'murmur';
     line.textContent = m;
-    el.prepend(line);
-    while (el.childElementCount > 6) el.lastChild.remove();
+    el.appendChild(line);
+    while (el.childElementCount > 5) el.firstChild.remove();
+    setTimeout(() => line.remove(), 6500);
   });
 
   refresh();

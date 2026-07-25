@@ -5,19 +5,29 @@
   --dim: #8fa0c5;
   --gold: #ffe178;
   --blue: #9cc9ff;
+  --sb: env(safe-area-inset-bottom);
+  --st: env(safe-area-inset-top);
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; } /* hidden must beat any display: rule */
-html, body { height: 100%; }
+html, body { height: 100%; overflow: hidden; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
   font: 15px/1.45 system-ui, -apple-system, sans-serif;
-  display: flex; flex-direction: column;
-  min-height: 100dvh;
 }
-main { flex: 1; display: flex; flex-direction: column; }
+main { height: 100dvh; display: flex; }
 
-/* gate */
+/* -------------------------------------------------------------- glass kit */
+.glass {
+  background: rgba(10, 17, 40, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(120, 150, 220, 0.22);
+  border-radius: 14px;
+  color: var(--ink);
+}
+
+/* ------------------------------------------------------------------ gate */
 #gate {
   margin: auto; width: min(92vw, 380px);
   display: flex; flex-direction: column; gap: 14px;
@@ -33,31 +43,11 @@ main { flex: 1; display: flex; flex-direction: column; }
 }
 #gate details { text-align: left; color: var(--dim); font-size: 13px; }
 #gate summary { cursor: pointer; padding: 4px 0; }
-#gate button {
+#gate button#join {
   padding: 14px; border: 0; border-radius: 12px; font-size: 16px; font-weight: 600;
   background: linear-gradient(135deg, #ffd35e, #ff9d3c); color: #241a05; cursor: pointer;
 }
-
-/* play */
-#play { flex: 1; display: flex; flex-direction: column; }
-#island { flex: 1; width: 100%; min-height: 46dvh; display: block; touch-action: none; }
-#hud { padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; }
-#mylamp {
-  align-self: center; padding: 6px 14px; border-radius: 999px;
-  background: #131b3d; color: var(--dim); font-size: 14px; transition: all .3s;
-}
-#mylamp.lit { background: #3d3413; color: var(--gold); box-shadow: 0 0 18px rgba(255,225,120,.35); }
-#fiction { text-align: center; color: var(--blue); min-height: 1.4em; }
-#fiction.error { color: #ff9d9d; }
-#log { color: var(--dim); font-size: 12px; text-align: center; min-height: 3.6em; opacity: .8; }
-#log div:first-child { color: var(--ink); }
-.row { display: flex; gap: 10px; justify-content: center; }
-.row button {
-  padding: 10px 18px; border: 0; border-radius: 10px; font-size: 14px; font-weight: 600;
-  background: #1b2650; color: var(--ink); cursor: pointer;
-}
-.row button.ghost { background: transparent; color: var(--dim); }
-
+.gstamp { color: #465579; font-size: 11px; }
 .swatches { display: flex; gap: 10px; }
 .swatch {
   width: 34px; height: 34px; border-radius: 50%; border: 2px solid transparent;
@@ -65,27 +55,93 @@ main { flex: 1; display: flex; flex-direction: column; }
 }
 .swatch.sel { border-color: #fff; opacity: 1; transform: scale(1.1); }
 
+/* ------------------------------------------------------------ full-bleed */
+#play { position: fixed; inset: 0; }
+#island { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+/* ---------------------------------------------------- panel 1: status */
+#status {
+  position: absolute; top: calc(12px + var(--st)); left: 50%; transform: translateX(-50%);
+  max-width: min(86vw, 480px);
+  padding: 8px 18px; font-size: 14px; text-align: center; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  color: var(--blue); transition: color .3s, border-color .3s, box-shadow .3s;
+  pointer-events: none;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+}
+#status.lit {
+  color: var(--gold); border-color: rgba(255, 225, 120, 0.35);
+  box-shadow: 0 0 24px rgba(255, 225, 120, 0.15);
+}
+#status .pill {
+  display: inline-block; padding: 1px 10px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 650; color: #141021;
+}
+#status.error { color: #ff9d9d; border-color: rgba(255, 130, 130, 0.35); }
+
+/* --------------------------------------------------- panel 2: murmurs */
+#murmurs {
+  position: absolute; left: 14px; bottom: calc(18px + var(--sb));
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  max-width: 62vw; pointer-events: none;
+}
+.murmur {
+  background: rgba(10, 17, 40, 0.5);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(120, 150, 220, 0.16);
+  border-radius: 10px; padding: 5px 12px;
+  font-size: 12.5px; color: var(--ink);
+  animation: murmur 6.4s ease forwards;
+}
+@keyframes murmur {
+  0% { opacity: 0; transform: translateY(8px); }
+  6% { opacity: 1; transform: translateY(0); }
+  80% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-10px); }
+}
+
+/* ---------------------------------------------- panel 3: action corner */
+#corner {
+  position: absolute; right: 14px; bottom: calc(14px + var(--sb));
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+}
+#fab {
+  width: 46px; height: 46px; border-radius: 50%;
+  font-size: 19px; color: var(--gold); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .2s;
+}
+#fab:active { transform: scale(.92); }
+#fan { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+#fan button {
+  padding: 9px 18px; font-size: 13.5px; font-weight: 600; cursor: pointer;
+  animation: fanin .18s ease;
+}
+@keyframes fanin { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; } }
+#stamp { color: #465579; font-size: 10px; }
+
+#iosTip {
+  position: absolute; right: 14px; bottom: calc(150px + var(--sb));
+  max-width: 260px; padding: 10px 14px;
+  font-size: 12px; color: var(--dim); line-height: 1.5;
+}
+#iosTip .shr { color: var(--blue); }
+
+/* ----------------------------------------------------------- QR modal */
 #qrmodal {
-  position: fixed; inset: 0; background: rgba(3,5,15,.8);
+  position: fixed; inset: 0; background: rgba(3, 5, 15, 0.8);
   display: flex; align-items: center; justify-content: center; z-index: 10;
 }
 .qrcard {
-  background: var(--panel); border: 1px solid #26325c; border-radius: 16px;
   padding: 22px; text-align: center; display: flex; flex-direction: column; gap: 12px;
   width: min(88vw, 340px);
 }
 .qrcard h2 { margin: 0; font-size: 18px; }
 .qrcard img { width: 100%; max-width: 260px; margin: 0 auto; border-radius: 8px; background: #fff; }
 #qrurl { color: var(--dim); font-size: 11px; word-break: break-all; }
-
-#install { background: #14324a; color: #9cc9ff; }
-#iosTip {
-  text-align: center; color: var(--dim); font-size: 12px;
-  padding: 6px 14px; line-height: 1.5;
+.row { display: flex; gap: 10px; justify-content: center; }
+.row button {
+  padding: 10px 18px; border: 0; border-radius: 10px; font-size: 14px; font-weight: 600;
+  background: #1b2650; color: var(--ink); cursor: pointer;
 }
-#iosTip .shr { color: var(--blue); }
-
-footer {
-  text-align: center; color: #465579; font-size: 11px;
-  padding: 6px 0 calc(6px + env(safe-area-inset-bottom));
-}
+.row button.ghost { background: transparent; color: var(--dim); }
