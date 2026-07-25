@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v27';
+const FF_VERSION = 'FF v28';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -194,6 +194,7 @@ const game = new (class extends Emitter {
     if (this.client) { try { this.client.close(); } catch (_) {} this.client = null; }
     this.#joined = false; this.#declared = false;
     this.lastError = null;
+    this.#resetWorld(); // never show the previous island's fireflies mid-crossing
     this.setState('connecting');
     this.log(`Flying to the island at ${this.me.host}…`);
 
@@ -520,7 +521,26 @@ const game = new (class extends Emitter {
   leave() {
     if (this.client) { try { this.client.close(); } catch (_) {} this.client = null; }
     this.#joined = false;
+    this.#resetWorld();
     this.setState('idle');
+  }
+
+  // Forget everything derived from a realm's keys — used when leaving or
+  // switching islands. Baselines reset to null so the next island baselines
+  // silently (no replayed animations from its history).
+  #resetWorld() {
+    this.fireflies = [];
+    this.myLampOn = false;
+    this.litBy = [];
+    this.beacon = { present: false, level: 0, pattern: 'calm', connId: null };
+    this.pendingBoost = 0;
+    this.celebrateUntil = 0;
+    this.#welcomed = new Set();
+    this.#lastGranted = null;
+    this.#lastFeeds = null;
+    this.#lastSOut = null;
+    this.#wasAllLit = false;
+    this.emit('change');
   }
 })();
 
