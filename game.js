@@ -1,0 +1,798 @@
+// Firefly Island — Phase 2 (FF v2)
+// v1: two-firefly slice on cp:padi.light (addressed writes, OR-lamp, deranked
+//     self-connection). Exit test PASSED live 2026-07-25 (cross-system bind 1.2s).
+// v2 adds, all on the padi.game.* CPs published 2026-07-25:
+//   - presence: provider of cp:padi.game.presence (name/place/color propagate;
+//     spirit's `welcome` arrives ADDRESSED on our provider-side connection)
+//   - beacon: consumer of cp:padi.game.beacon (level/pattern read from the
+//     spirit's capability keys; `feed` is an addressed per-connection write,
+//     `granted` the spirit's addressed ack)
+//   - colored fireflies, QR share, all-lit celebration
+//
+// Ported invariants (do not regress):
+//   - capability re-declaration WIPES values -> skip when /version key exists
+//   - no .watch(): derive everything from client.keys on 'update'
+//   - reconnect re-runs join(); the wiper guard makes that safe
+
+'use strict';
+
+// ------------------------------------------------------------------ consts
+const FF_VERSION = 'FF v9';
+const DEFAULT_HOST = 'bali.aretehosting.com';
+const DEFAULT_PORT = 443;
+const P_LIGHT = 'padi.light';
+const P_PRES = 'padi.game.presence';
+const P_BEACON = 'padi.game.beacon';
+const ISLAND_CTX_ID = 'FireflyIslandPhase1Ctx'; // 22 chars, shared by every player
+const ISLAND_CTX_NAME = 'Firefly Island';
+const RETRY_MS = 5000;
+const KEYS_DEBOUNCE_MS = 300;
+const COLORS = ['#ffe178', '#8ce99a', '#74c0fc', '#f783ac', '#b197fc', '#ffa94d'];
+
+const LS_IDENTITY = 'firefly-identity';
+const LS_NAME = 'firefly-name';
+const LS_HOST = 'firefly-host';
+const LS_COLOR = 'firefly-color';
+const LS_FEED = 'firefly-feed-count';
+
+// ------------------------------------------------------------ tiny emitter
+class Emitter {
+  #h = {};
+  on(ev, fn) { (this.#h[ev] || (this.#h[ev] = [])).push(fn); return this; }
+  emit(ev, ...args) { for (const fn of [...(this.#h[ev] || [])]) fn(...args); return this; }
+}
+
+// ------------------------------------------- SDK merge + client (ported 1:1)
+const getType = (v) => Object.prototype.toString.call(v);
+function merge(target, source) {
+  for (const key in source) {
+    const value = source[key];
+    const type = getType(value);
+    if (type === '[object Null]') delete target[key];
+    else if (type === '[object Object]') {
+      if (getType(target[key]) !== type || Object.keys(value).length === 0) target[key] = {};
+      merge(target[key], value);
+    } else target[key] = value;
+  }
+}
+
+class BrowserAreteClient extends Emitter {
+  constructor(url) {
+    super();
+    this.url = url; this.userClosed = false; this.socket = undefined;
+    this.#reset(); this.open();
+  }
+  #reset() {
+    if (this.requests) for (const t in this.requests) this.requests[t].reject(new Error('Socket request failed'));
+    this.transaction = 1; this.requests = {}; this.updates = 0;
+    this.cache = { version: '', stats: {}, keys: {} };
+  }
+  open() {
+    if (this.socket !== undefined || this.userClosed) return;
+    this.#reset();
+    this.socket = new WebSocket(this.url);
+    this.socket.onmessage = (e) => this.#onmessage(e);
+    this.socket.onclose = () => this.#onclose();
+    this.socket.onerror = () => this.emit('error', new Error('Socket not open'));
+  }
+  async waitForOpen(timeout = 12000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeout) {
+      if (this.updates > 0) return; // first snapshot merged = truly ready
+      if (this.userClosed) throw new Error('Connection cancelled');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error('Failed to connect within timeout');
+  }
+  isOpen() { return this.socket !== undefined && this.socket.readyState === WebSocket.OPEN; }
+  get keys() { return this.cache.keys; }
+  put(key, value) { return this.command('put', key, value); }
+  command(cmd, ...args) {
+    return new Promise((resolve, reject) => {
+      if (!this.isOpen()) return reject(new Error('Socket not open'));
+      for (const arg of args) cmd += ' "' + arg + '"';
+      const transaction = this.transaction++;
+      this.requests[transaction] = { resolve, reject };
+      this.socket.send(JSON.stringify({ transaction, format: 'json', command: cmd }));
+    });
+  }
+  close() {
+    this.userClosed = true;
+    if (this.socket !== undefined) this.socket.close();
+    this.socket = undefined;
+  }
+  #onmessage(e) {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.transaction !== undefined) {
+        const req = this.requests[data.transaction];
+        if (req) { delete this.requests[data.transaction]; req.resolve(data); }
+        return;
+      }
+      merge(this.cache, data);
+      if (this.updates++ === 0) this.emit('open', e);
+      this.emit('update', data);
+    } catch (err) { this.emit('error', err); }
+  }
+  #onclose() {
+    const had = this.socket !== undefined;
+    this.socket = undefined; this.#reset();
+    if (this.userClosed) return;
+    if (had) this.emit('close');
+    setTimeout(() => this.open(), RETRY_MS);
+  }
+}
+
+// ---------------------------------------------------------------- identity
+const B62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+function base62(len = 22) {
+  const bytes = crypto.getRandomValues(new Uint8Array(len));
+  let out = ''; for (const b of bytes) out += B62[b % 62]; return out;
+}
+function identity() {
+  let id;
+  try { id = JSON.parse(localStorage.getItem(LS_IDENTITY)); } catch (_) {}
+  if (!id || !id.systemId || !id.nodeId) {
+    id = { systemId: crypto.randomUUID(), nodeId: base62(22) };
+    localStorage.setItem(LS_IDENTITY, JSON.stringify(id));
+  }
+  return id;
+}
+const clean = (s) => String(s || '').replace(/["\\\n\r]/g, '').trim().slice(0, 24);
+const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// ---------------------------------------------------------------- the game
+const game = new (class extends Emitter {
+  client = null;
+  state = 'idle';        // idle | connecting | joining | alone | waiting | live | error
+  lastError = null;
+  me = { ...identity(), name: '', color: COLORS[0], host: DEFAULT_HOST };
+  ctxId = ISLAND_CTX_ID;
+  fireflies = [];        // [{key, sysId, nodeId, name, color, lampOn, isMe, connId, litByMe}]
+  myLampOn = false;
+  litBy = [];
+  beacon = { present: false, level: 0, pattern: 'calm', connId: null };
+  celebrateUntil = 0;
+  pendingBoost = 0;   // optimistic +level shown while the spirit hasn't acked yet
+  pendingAt = 0;
+  #keysTimer = null;
+  #joined = false;
+  #declared = false;
+  #welcomed = new Set();  // welcome messages already shown (per conn)
+  #lastGranted = null;
+  #wasAllLit = false;
+  #lastFeeds = null;      // spirit-side feed counts (null until baselined)
+  #lastSOut = null;       // every island switch's per-connection sOut (baselined)
+
+  log(m) { this.emit('log', m); }
+  setState(s) { if (this.state !== s) { this.state = s; this.emit('change'); } }
+
+  #base(role, profile) {
+    return `cns/${this.me.systemId}/nodes/${this.me.nodeId}/contexts/${this.ctxId}/${role}/${profile}`;
+  }
+
+  async join(name, host, color) {
+    this.me.name = clean(name) || 'A firefly';
+    this.me.host = clean(host) || DEFAULT_HOST;
+    this.me.color = COLORS.includes(color) ? color : COLORS[0];
+    localStorage.setItem(LS_NAME, this.me.name);
+    localStorage.setItem(LS_HOST, this.me.host);
+    localStorage.setItem(LS_COLOR, this.me.color);
+
+    const url = new URLSearchParams(location.search);
+    this.ctxId = clean(url.get('island')) || ISLAND_CTX_ID;
+
+    if (this.client) { try { this.client.close(); } catch (_) {} this.client = null; }
+    this.#joined = false; this.#declared = false;
+    this.lastError = null;
+    this.setState('connecting');
+    this.log(`Flying to the island at ${this.me.host}…`);
+
+    this.client = new BrowserAreteClient(`wss://${this.me.host}:${DEFAULT_PORT}`);
+    this.client.on('update', () => this.#scheduleDerive());
+    this.client.on('close', () => {
+      this.log('Lost the island in the dark — circling back…');
+      if (this.state !== 'idle') this.setState('connecting');
+    });
+    this.client.on('open', () => {
+      if (this.#joined) this.#register().catch((e) => this.#fail(e));
+    });
+    this.client.on('error', () => {
+      if (!this.#joined && this.state === 'connecting') {
+        this.lastError = 'The island is unreachable (network, certificate, or auth).';
+        this.emit('change');
+      }
+    });
+
+    try {
+      await this.client.waitForOpen(15000);
+    } catch (e) { return this.#fail(e); }
+
+    this.setState('joining');
+    try { await this.#register(); } catch (e) { return this.#fail(e); }
+    this.#joined = true;
+    this.log('Your firefly has landed. Waiting for the island to notice…');
+    this.#scheduleDerive();
+  }
+
+  #fail(e) {
+    this.lastError = String(e && e.message ? e.message : e);
+    this.setState('error');
+    this.log(`✗ ${this.lastError}`);
+  }
+
+  // System -> Node -> Context -> capabilities, with the value-wiper guard.
+  async #register() {
+    const c = this.client;
+    const { systemId, nodeId, name } = this.me;
+    await c.command('systems', systemId, `Firefly (${name})`);
+    await c.command('nodes', systemId, nodeId, name, false, null);
+    await c.command('contexts', systemId, nodeId, this.ctxId, ISLAND_CTX_NAME);
+    const caps = [
+      ['provider', P_LIGHT], ['consumer', P_LIGHT],   // switch + lamp
+      ['provider', P_PRES],                            // firefly announces itself
+      ['consumer', P_BEACON],                          // player feeds/watches beacon
+    ];
+    const keys = c.keys || {};
+    for (const [role, profile] of caps) {
+      const base = this.#base(role, profile);
+      if (keys[base + '/version'] !== undefined) continue; // re-declaring WIPES values
+      await c.command(role === 'provider' ? 'providers' : 'consumers',
+        systemId, nodeId, this.ctxId, profile);
+    }
+    this.#declared = true;
+    // Idempotent-safe capability puts (only when absent or stale).
+    const want = {
+      [`${this.#base('provider', P_LIGHT)}/properties/sLabel`]: `${name}'s switch`,
+      [`${this.#base('consumer', P_LIGHT)}/properties/cLabel`]: `${name}'s lamp`,
+      [`${this.#base('provider', P_PRES)}/properties/name`]: name,
+      [`${this.#base('provider', P_PRES)}/properties/place`]: ISLAND_CTX_NAME,
+      [`${this.#base('provider', P_PRES)}/properties/color`]: this.me.color,
+    };
+    for (const k in want) if (keys[k] !== want[k]) await c.put(k, want[k]);
+    if (keys[`${this.#base('consumer', P_LIGHT)}/properties/cState`] === undefined) {
+      await c.put(`${this.#base('consumer', P_LIGHT)}/properties/cState`, '0');
+    }
+  }
+
+  #scheduleDerive() {
+    if (this.#keysTimer) return;
+    this.#keysTimer = setTimeout(() => { this.#keysTimer = null; this.#derive(); }, KEYS_DEBOUNCE_MS);
+  }
+
+  // Everything below is key-derivation — no watches, no cached assumptions.
+  #derive() {
+    if (!this.client || !this.#joined) return;
+    const keys = this.client.keys || {};
+    const meKey = `${this.me.systemId}/${this.me.nodeId}`;
+    const ctx = esc(this.ctxId);
+
+    // 1) Roster: every node with a padi.light consumer (a lamp) in the context.
+    //    Name/color enriched from that node's presence provider, if declared.
+    const roster = new Map();
+    const rosterRe = new RegExp(`^cns/([^/]+)/nodes/([^/]+)/contexts/${ctx}/consumer/${esc(P_LIGHT)}/version$`);
+    for (const k in keys) {
+      const m = k.match(rosterRe);
+      if (!m) continue;
+      const [, sysId, nodeId] = m;
+      const fkey = `${sysId}/${nodeId}`;
+      const presBase = `cns/${sysId}/nodes/${nodeId}/contexts/${this.ctxId}/provider/${P_PRES}`;
+      roster.set(fkey, {
+        key: fkey, sysId, nodeId,
+        name: keys[`${presBase}/properties/name`] || keys[`cns/${sysId}/nodes/${nodeId}/name`] || 'a firefly',
+        color: keys[`${presBase}/properties/color`] || '#ffe178',
+        lampOn: keys[`cns/${sysId}/nodes/${nodeId}/contexts/${this.ctxId}/consumer/${P_LIGHT}/properties/cState`] === '1',
+        isMe: fkey === meKey,
+        connId: null, litByMe: false,
+      });
+    }
+
+    // 2) My OUTGOING light connections (provider side): peer firefly -> connId.
+    const provBase = this.#base('provider', P_LIGHT);
+    const provConnRe = new RegExp(`^${esc(provBase)}/connections/([^/]+)/consumer$`);
+    for (const k in keys) {
+      const m = k.match(provConnRe);
+      if (!m) continue;
+      const p = String(keys[k]).split('/');
+      const fkey = `${p[1]}/${p[3]}`;
+      const f = roster.get(fkey);
+      if (!f || f.isMe) continue; // self-connection: legal, deranked, not played
+      f.connId = m[1];
+      f.litByMe = keys[`${provBase}/connections/${m[1]}/properties/sOut`] === '1';
+    }
+
+    // 3) My lamp: ON iff ANY incoming connection says sOut=1 (tug-of-war legal).
+    const consBase = this.#base('consumer', P_LIGHT);
+    const consConnRe = new RegExp(`^${esc(consBase)}/connections/([^/]+)/provider$`);
+    const litBy = [];
+    for (const k in keys) {
+      const m = k.match(consConnRe);
+      if (!m) continue;
+      const p = String(keys[k]).split('/');
+      const fkey = `${p[1]}/${p[3]}`;
+      if (fkey === meKey) continue; // deranked self-connection
+      if (keys[`${consBase}/connections/${m[1]}/properties/sOut`] === '1') {
+        const who = roster.get(fkey);
+        litBy.push(who ? who.name : 'someone');
+      }
+    }
+    const lampOn = litBy.length > 0;
+    if (lampOn !== this.myLampOn && this.#declared && this.client.isOpen()) {
+      this.client.put(`${consBase}/properties/cState`, lampOn ? '1' : '0').catch(() => {});
+      this.log(lampOn ? `✨ ${litBy.join(' and ')} lit your lamp!` : 'Your lamp went dark.');
+    }
+    this.myLampOn = lampOn;
+    this.litBy = litBy;
+
+    // 4) Spirit's welcome — arrives ADDRESSED on my presence provider connection.
+    const presBase = this.#base('provider', P_PRES);
+    const welcomeRe = new RegExp(`^${esc(presBase)}/connections/([^/]+)/properties/welcome$`);
+    for (const k in keys) {
+      const m = k.match(welcomeRe);
+      if (m && keys[k] && !this.#welcomed.has(m[1])) {
+        this.#welcomed.add(m[1]);
+        this.log(`🌟 The island spirit: ${keys[k]}`);
+      }
+    }
+
+    // 5) Beacon: read the spirit's provider capability directly off the keys
+    //    (level/pattern propagate — and capability keys are realm-visible).
+    const beaconRe = new RegExp(`^cns/([^/]+)/nodes/([^/]+)/contexts/${ctx}/provider/${esc(P_BEACON)}/version$`);
+    let beaconBase = null;
+    for (const k in keys) {
+      const m = k.match(beaconRe);
+      if (m) { beaconBase = k.slice(0, -'/version'.length); break; }
+    }
+    const myBeacon = this.#base('consumer', P_BEACON);
+    const beaconConnRe = new RegExp(`^${esc(myBeacon)}/connections/([^/]+)/provider$`);
+    let beaconConn = null;
+    for (const k in keys) {
+      const m = k.match(beaconConnRe);
+      if (m) { beaconConn = m[1]; break; }
+    }
+    this.beacon = {
+      present: !!beaconBase,
+      level: beaconBase ? Math.max(0, Math.min(100, parseInt(keys[`${beaconBase}/properties/level`] || '0', 10) || 0)) : 0,
+      pattern: beaconBase ? (keys[`${beaconBase}/properties/pattern`] || 'calm') : 'calm',
+      connId: beaconConn,
+    };
+    const granted = beaconConn ? keys[`${myBeacon}/connections/${beaconConn}/properties/granted`] : null;
+    if (granted && granted !== this.#lastGranted) {
+      if (this.#lastGranted !== null) this.log('✦ The beacon drank your light. It burns brighter.');
+      this.#lastGranted = granted;
+      this.pendingBoost = 0; // realm has caught up with the optimistic glow
+    }
+
+    // 5b) OTHER fireflies feeding: their addressed `feed` counts are mirrored
+    //     on the spirit's provider-side connections — watch them tick up.
+    if (beaconBase) {
+      const spiritConnRe = new RegExp(`^${esc(beaconBase)}/connections/([^/]+)/consumer$`);
+      const feeds = {};
+      const first = this.#lastFeeds === null; // baseline silently, no replay
+      for (const k in keys) {
+        const m = k.match(spiritConnRe);
+        if (!m) continue;
+        const p = String(keys[k]).split('/');
+        const fkey = `${p[1]}/${p[3]}`;
+        const n = parseInt(keys[`${beaconBase}/connections/${m[1]}/properties/feed`] || '0', 10) || 0;
+        feeds[m[1]] = n;
+        const prev = first ? n : (this.#lastFeeds[m[1]] ?? n);
+        if (n > prev && fkey !== meKey) {
+          this.emit('peerfeedfx', { key: fkey });
+          const who = roster.get(fkey);
+          if (who) this.log(`${who.name} fed the beacon ✦`);
+        }
+      }
+      this.#lastFeeds = feeds;
+    }
+
+    // 5c) EVERY switch->lamp act on the island, animated for everyone:
+    //     all provider-side per-connection sOut values are realm-visible;
+    //     when one flips, fly a mote from that switch's firefly to its lamp.
+    {
+      const wireRe = new RegExp(`^cns/([^/]+)/nodes/([^/]+)/contexts/${ctx}/provider/${esc(P_LIGHT)}/connections/([^/]+)/(consumer|properties/sOut)$`);
+      const wires = {};
+      for (const k in keys) {
+        const m = k.match(wireRe);
+        if (!m) continue;
+        const id = `${m[1]}/${m[2]}/${m[3]}`;
+        const w = wires[id] || (wires[id] = { from: `${m[1]}/${m[2]}`, to: null, sOut: null });
+        if (m[4] === 'consumer') { const p = String(keys[k]).split('/'); w.to = `${p[1]}/${p[3]}`; }
+        else w.sOut = keys[k];
+      }
+      const first = this.#lastSOut === null;
+      const last = first ? {} : this.#lastSOut;
+      const cur = {};
+      for (const id in wires) {
+        const w = wires[id];
+        if (w.sOut !== null) cur[id] = w.sOut;
+        if (first || w.sOut === null || !w.to || w.from === w.to) continue; // baseline / self-conn
+        const prev = last[id];
+        if (prev !== undefined && prev !== w.sOut && w.from !== meKey) {
+          this.emit('togglefx', { from: w.from, to: w.to, on: w.sOut === '1' });
+          const a = roster.get(w.from), b = roster.get(w.to);
+          if (a && b && !b.isMe) {
+            this.log(w.sOut === '1' ? `${a.name} lit ${b.name}'s lamp ✨` : `${a.name} let go of ${b.name}'s lamp`);
+          }
+        }
+      }
+      this.#lastSOut = cur;
+    }
+
+    // 6) Order: me first, then bound peers, then the not-yet-bound.
+    this.fireflies = [...roster.values()].sort((a, b) =>
+      (b.isMe - a.isMe) || ((b.connId ? 1 : 0) - (a.connId ? 1 : 0)) || a.name.localeCompare(b.name));
+
+    // 7) All-lit celebration (rising edge, needs at least 2 fireflies).
+    const allLit = this.fireflies.length >= 2 && this.fireflies.every((f) => f.lampOn);
+    if (allLit && !this.#wasAllLit) {
+      this.celebrateUntil = performance.now() + 6000;
+      this.log('🎆 EVERY LAMP ON THE ISLAND IS LIT!');
+    }
+    this.#wasAllLit = allLit;
+
+    // 8) Fiction state machine.
+    const others = this.fireflies.filter((f) => !f.isMe);
+    const bound = others.filter((f) => f.connId);
+    if (others.length === 0) this.setState('alone');
+    else if (bound.length === 0) this.setState('waiting');
+    else this.setState('live');
+    this.emit('change');
+  }
+
+  // Tap a firefly: ADDRESSED write into that one connection — never broadcast.
+  async toggle(fkey) {
+    const f = this.fireflies.find((x) => x.key === fkey);
+    if (!f || f.isMe || !f.connId || !this.client || !this.client.isOpen()) return;
+    const key = `${this.#base('provider', P_LIGHT)}/connections/${f.connId}/properties/sOut`;
+    const next = f.litByMe ? '0' : '1';
+    this.emit('tapfx', { key: f.key, on: next === '1' }); // reward FIRST, realm truth follows
+    try {
+      await this.client.put(key, next);
+      this.log(next === '1' ? `You lit ${f.name}'s lamp.` : `You let go of ${f.name}'s lamp.`);
+    } catch (e) { this.log(`✗ Write failed: ${e.message || e}`); }
+  }
+
+  // Feed the beacon: monotonic tap-count, ADDRESSED to the spirit's connection.
+  // Feedback is instant and optimistic (mote + glow); the spirit's `granted`
+  // ack then confirms and replaces the optimism with realm truth.
+  async feed() {
+    if (!this.beacon.connId || !this.client || !this.client.isOpen()) return;
+    const n = (parseInt(localStorage.getItem(LS_FEED) || '0', 10) || 0) + 1;
+    localStorage.setItem(LS_FEED, String(n));
+    this.pendingBoost = Math.min(30, this.pendingBoost + 3);
+    this.pendingAt = performance.now();
+    this.emit('feedfx');
+    const key = `${this.#base('consumer', P_BEACON)}/connections/${this.beacon.connId}/properties/feed`;
+    try { await this.client.put(key, String(n)); }
+    catch (e) { this.log(`✗ Feed failed: ${e.message || e}`); }
+  }
+
+  shareUrl() {
+    const u = new URL(location.href);
+    u.search = '';
+    if (this.ctxId !== ISLAND_CTX_ID) u.searchParams.set('island', this.ctxId);
+    if (this.me.host !== DEFAULT_HOST) u.searchParams.set('host', this.me.host);
+    return u.toString();
+  }
+
+  leave() {
+    if (this.client) { try { this.client.close(); } catch (_) {} this.client = null; }
+    this.#joined = false;
+    this.setState('idle');
+  }
+})();
+
+// ------------------------------------------------------------------- the UI
+const $ = (s) => document.querySelector(s);
+
+function fictionLine() {
+  switch (game.state) {
+    case 'connecting': return 'Your firefly is crossing the water…';
+    case 'joining': return 'Your firefly is finding its way to the island…';
+    case 'alone': return 'The island is quiet. Share the link — lamps need friends.';
+    case 'waiting': return 'Fireflies nearby! The island spirits are wiring the lanterns…';
+    case 'live': return game.myLampOn ? 'Your lamp is LIT. Return the favor?' : 'Tap a firefly to light their lamp.';
+    case 'error': return game.lastError || 'Something went wrong.';
+    default: return '';
+  }
+}
+
+function posFor(key, i, n, W, H) {
+  let h = 0; for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const angle = (i / Math.max(n, 1)) * Math.PI * 2 + (h % 100) / 100;
+  const rx = W * 0.30 + (h % 37) / 37 * W * 0.08;
+  const ry = H * 0.20 + (h % 23) / 23 * H * 0.06;
+  return { x: W / 2 + Math.cos(angle) * rx, y: H * 0.52 + Math.sin(angle) * ry };
+}
+
+let hit = [];
+let sparks = [];
+let motes = [];        // sparks of light flying from your firefly to a target
+let rings = [];        // expanding flash rings where motes land
+let mePos = null;
+
+const beaconLight = (W, H) => ({ x: W / 2, y: H * 0.40 - 12 });
+
+function drawBeacon(g, W, H, t) {
+  const b = game.beacon;
+  if (!b.present) return;
+  const bx = W / 2, byTop = H * 0.40, byBase = H * 0.62;
+  // tower
+  g.fillStyle = '#1a2c49';
+  g.beginPath();
+  g.moveTo(bx - 9, byBase); g.lineTo(bx - 5, byTop); g.lineTo(bx + 5, byTop); g.lineTo(bx + 9, byBase);
+  g.closePath(); g.fill();
+  g.fillStyle = '#24406b';
+  g.fillRect(bx - 7, byTop - 8, 14, 8);
+  // light, scaled by level (+ optimistic boost while a feed awaits its ack)
+  const now = performance.now();
+  const boost = (now - game.pendingAt < 10000) ? game.pendingBoost : 0;
+  const lv = Math.min(100, b.level + boost) / 100;
+  const pulse = b.pattern === 'festival' ? (0.75 + 0.25 * Math.sin(t * 6)) : 1;
+  const r = (12 + lv * 46) * pulse;
+  if (r > 2) {
+    const glow = g.createRadialGradient(bx, byTop - 12, 2, bx, byTop - 12, r);
+    glow.addColorStop(0, `rgba(255,214,94,${0.75 * Math.max(lv, 0.15)})`);
+    glow.addColorStop(1, 'rgba(255,214,94,0)');
+    g.fillStyle = glow;
+    g.beginPath(); g.arc(bx, byTop - 12, r, 0, Math.PI * 2); g.fill();
+  }
+  g.fillStyle = lv > 0.05 ? '#ffe89a' : '#3a4666';
+  g.beginPath(); g.arc(bx, byTop - 12, 4, 0, Math.PI * 2); g.fill();
+  // the beacon IS the feed button
+  if (b.connId) {
+    g.fillStyle = 'rgba(255,225,120,0.5)';
+    g.font = '11px system-ui, sans-serif'; g.textAlign = 'center';
+    g.fillText('tap to feed ✦', bx, byBase + 16);
+    hit.push({ x: bx, y: byTop - 12, r: 34, beacon: true });
+  }
+}
+
+function drawMotes(g, W, H) {
+  const now = performance.now();
+  motes = motes.filter((m) => now - m.born < m.dur);
+  for (const m of motes) {
+    const to = m.to || beaconLight(W, H);
+    const p = (now - m.born) / m.dur;
+    const e = 1 - (1 - p) * (1 - p); // ease-out
+    const x = m.from.x + (to.x - m.from.x) * e;
+    const y = m.from.y + (to.y - m.from.y) * e - Math.sin(p * Math.PI) * 40; // gentle arc
+    const [core, glowC] = m.dim
+      ? ['#b9c6e8', 'rgba(150,170,220,0.7)']
+      : ['#fff3c4', 'rgba(255,236,160,0.95)'];
+    const glow = g.createRadialGradient(x, y, 1, x, y, 12);
+    glow.addColorStop(0, glowC);
+    glow.addColorStop(1, 'rgba(255,236,160,0)');
+    g.fillStyle = glow;
+    g.beginPath(); g.arc(x, y, 12, 0, Math.PI * 2); g.fill();
+    g.fillStyle = core;
+    g.beginPath(); g.arc(x, y, 2.5, 0, Math.PI * 2); g.fill();
+    if (p > 0.96 && !m.landed) { m.landed = true; rings.push({ x: to.x, y: to.y, at: now, dim: m.dim }); }
+  }
+  rings = rings.filter((r) => now - r.at < 600);
+  for (const r of rings) {
+    const age = (now - r.at) / 600;
+    g.strokeStyle = r.dim ? `rgba(150,170,220,${0.7 * (1 - age)})` : `rgba(255,225,120,${0.8 * (1 - age)})`;
+    g.lineWidth = 2;
+    g.beginPath(); g.arc(r.x, r.y, 6 + age * 30, 0, Math.PI * 2); g.stroke();
+  }
+}
+
+function drawCelebration(g, W, H) {
+  const now = performance.now();
+  if (now > game.celebrateUntil) { sparks = []; return; }
+  if (sparks.length === 0) {
+    for (let i = 0; i < 90; i++) {
+      sparks.push({
+        x: W / 2, y: H * 0.45,
+        vx: (Math.random() - 0.5) * 5, vy: (Math.random() - 0.8) * 5,
+        c: COLORS[i % COLORS.length], born: now, life: 2500 + Math.random() * 3000,
+      });
+    }
+  }
+  for (const s of sparks) {
+    const age = now - s.born;
+    if (age > s.life) continue;
+    s.x += s.vx; s.y += s.vy; s.vy += 0.03;
+    g.globalAlpha = 1 - age / s.life;
+    g.fillStyle = s.c;
+    g.fillRect(s.x, s.y, 2.5, 2.5);
+  }
+  g.globalAlpha = 1;
+}
+
+function draw() {
+  const cv = $('#island'); if (!cv) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const t = performance.now() / 1000;
+
+  const sky = g.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#060a1c'); sky.addColorStop(0.65, '#0b1230'); sky.addColorStop(1, '#0a1a2c');
+  g.fillStyle = sky; g.fillRect(0, 0, W, H);
+  let sh = 7;
+  for (let i = 0; i < 40; i++) {
+    sh = (sh * 16807) % 2147483647;
+    g.fillStyle = `rgba(255,255,255,${0.2 + (sh % 60) / 100})`;
+    g.fillRect((sh % W), (sh % Math.floor(H * 0.5)), 1.5, 1.5);
+  }
+  g.fillStyle = '#0e2438';
+  g.beginPath(); g.ellipse(W / 2, H * 0.78, W * 0.46, H * 0.16, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#123049';
+  g.beginPath(); g.ellipse(W / 2, H * 0.74, W * 0.40, H * 0.12, 0, 0, Math.PI * 2); g.fill();
+
+  hit = [];
+  drawBeacon(g, W, H, t); // also registers the beacon's tap region in `hit`
+  const flies = game.fireflies;
+  flies.forEach((f, i) => {
+    const { x, y } = posFor(f.key, i, flies.length, W, H);
+    const bob = Math.sin(t * 1.4 + i * 2.1) * 3;
+    const yy = y + bob;
+    const on = f.lampOn;
+
+    if (!f.isMe && f.connId) {
+      const me = flies.find((m) => m.isMe);
+      if (me) {
+        const mp = posFor(me.key, flies.indexOf(me), flies.length, W, H);
+        g.strokeStyle = 'rgba(120,180,255,0.10)';
+        g.lineWidth = 1;
+        g.beginPath(); g.moveTo(mp.x, mp.y); g.lineTo(x, yy); g.stroke();
+      }
+    }
+
+    if (on) {
+      const glow = g.createRadialGradient(x, yy, 2, x, yy, 34);
+      glow.addColorStop(0, hexA(f.color, 0.85));
+      glow.addColorStop(1, hexA(f.color, 0));
+      g.fillStyle = glow;
+      g.beginPath(); g.arc(x, yy, 34, 0, Math.PI * 2); g.fill();
+    }
+    g.fillStyle = on ? f.color : '#3a4666';
+    g.beginPath(); g.arc(x, yy, on ? 6 : 5, 0, Math.PI * 2); g.fill();
+    if (f.isMe) {
+      g.strokeStyle = 'rgba(140,200,255,0.9)'; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(x, yy, 10, 0, Math.PI * 2); g.stroke();
+    }
+    if (!f.isMe && f.litByMe) {
+      g.strokeStyle = hexA(f.color, 0.7); g.lineWidth = 1;
+      g.beginPath(); g.arc(x, yy, 10, 0, Math.PI * 2); g.stroke();
+    }
+
+    g.fillStyle = f.isMe ? '#9cc9ff' : (f.connId ? '#d8e2f5' : 'rgba(216,226,245,0.45)');
+    g.font = '12px system-ui, sans-serif'; g.textAlign = 'center';
+    g.fillText(f.isMe ? `${f.name} (you)` : f.name, x, yy + 24);
+    if (!f.isMe && !f.connId) g.fillText('…drifting closer…', x, yy + 38);
+
+    if (f.isMe) mePos = { x, y: yy };
+    hit.push({ x, y: yy, r: 22, key: f.key, isMe: f.isMe, bound: !!f.connId });
+  });
+
+  drawMotes(g, W, H);
+  drawCelebration(g, W, H);
+  requestAnimationFrame(draw);
+}
+
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+function refresh() {
+  const gate = $('#gate'), play = $('#play');
+  const joined = game.state !== 'idle';
+  gate.hidden = joined; play.hidden = !joined;
+  $('#fiction').textContent = fictionLine();
+  $('#fiction').classList.toggle('error', game.state === 'error');
+  const lit = game.myLampOn;
+  $('#mylamp').textContent = lit ? `Your lamp is lit — by ${game.litBy.join(' and ')}` : 'Your lamp is dark';
+  $('#mylamp').classList.toggle('lit', lit);
+}
+
+function showQr() {
+  const u = game.shareUrl();
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(u); qr.make();
+    $('#qrimg').src = qr.createDataURL(6, 8);
+  } catch (_) { $('#qrimg').removeAttribute('src'); }
+  $('#qrurl').textContent = u;
+  $('#qrmodal').hidden = false;
+}
+
+function wireUi() {
+  $('#ffVersion').textContent = FF_VERSION;
+  const url = new URLSearchParams(location.search);
+  $('#name').value = localStorage.getItem(LS_NAME) || '';
+  $('#host').value = url.get('host') || localStorage.getItem(LS_HOST) || DEFAULT_HOST;
+
+  // color swatches
+  const saved = localStorage.getItem(LS_COLOR) || COLORS[0];
+  const sw = $('#colors');
+  COLORS.forEach((c) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'swatch'; b.style.background = c;
+    b.classList.toggle('sel', c === saved);
+    b.addEventListener('click', () => {
+      sw.querySelectorAll('.swatch').forEach((x) => x.classList.remove('sel'));
+      b.classList.add('sel');
+    });
+    b.dataset.color = c;
+    sw.appendChild(b);
+  });
+
+  $('#join').addEventListener('click', () => {
+    const name = $('#name').value.trim();
+    if (!name) { $('#name').focus(); return; }
+    const color = (sw.querySelector('.swatch.sel') || sw.firstChild).dataset.color;
+    game.join(name, $('#host').value.trim(), color);
+  });
+  $('#name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#join').click(); });
+  $('#leave').addEventListener('click', () => { game.leave(); refresh(); });
+  $('#share').addEventListener('click', showQr);
+  $('#qrclose').addEventListener('click', () => { $('#qrmodal').hidden = true; });
+  $('#qrcopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(game.shareUrl()); $('#qrcopy').textContent = 'Copied!'; }
+    catch (_) {}
+    setTimeout(() => { $('#qrcopy').textContent = 'Copy link'; }, 1500);
+  });
+  const buzz = () => { try { navigator.vibrate && navigator.vibrate(12); } catch (_) {} };
+  game.on('feedfx', () => {
+    const cv = $('#island');
+    const from = mePos || { x: cv.clientWidth / 2, y: cv.clientHeight * 0.9 };
+    motes.push({ from, to: null, born: performance.now(), dur: 750 }); // null target = the beacon
+    buzz();
+  });
+  game.on('peerfeedfx', ({ key }) => {
+    const h = hit.find((x) => x.key === key);
+    const cv = $('#island');
+    const from = h ? { x: h.x, y: h.y } : { x: cv.clientWidth * 0.15, y: cv.clientHeight * 0.5 };
+    motes.push({ from, to: null, born: performance.now(), dur: 750 });
+  });
+  game.on('togglefx', ({ from, to, on }) => {
+    const a = hit.find((x) => x.key === from);
+    const b = hit.find((x) => x.key === to);
+    if (!a || !b) return;
+    motes.push({ from: { x: a.x, y: a.y }, to: { x: b.x, y: b.y }, born: performance.now(), dur: 600, dim: !on });
+  });
+  game.on('tapfx', ({ key, on }) => {
+    const h = hit.find((x) => x.key === key);
+    if (!h) return;
+    const cv = $('#island');
+    const from = mePos || { x: cv.clientWidth / 2, y: cv.clientHeight * 0.9 };
+    motes.push({ from, to: { x: h.x, y: h.y }, born: performance.now(), dur: 600, dim: !on });
+    buzz();
+  });
+
+  $('#island').addEventListener('click', (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    for (const h of hit) {
+      if ((x - h.x) ** 2 + (y - h.y) ** 2 > h.r ** 2) continue;
+      if (h.beacon) { game.feed(); return; }
+      if (!h.isMe && h.bound) { game.toggle(h.key); return; }
+    }
+  });
+
+  game.on('change', refresh);
+  game.on('log', (m) => {
+    const el = $('#log');
+    const line = document.createElement('div');
+    line.textContent = m;
+    el.prepend(line);
+    while (el.childElementCount > 6) el.lastChild.remove();
+  });
+
+  refresh();
+  requestAnimationFrame(draw);
+
+  if ($('#name').value && url.get('autojoin') !== '0') $('#join').click();
+}
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+document.addEventListener('DOMContentLoaded', wireUi);

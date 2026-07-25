@@ -1,0 +1,13 @@
+{
+  "name": "firefly-island-spirit",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Always-on host node for Firefly Island: beacon decay/feeding (cp:padi.game.beacon) + welcomes (cp:padi.game.presence).",
+  "scripts": {
+    "start": "node island-spirit.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#060a1c" />
+  <title>Firefly Island</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon-192.png" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="stylesheet" href="firefly.css" />
+</head>
+<body>
+  <main>
+    <section id="gate">
+      <img src="icon-192.png" alt="" class="logo" />
+      <h1>Firefly Island</h1>
+      <p class="tag">Your lamp only lights when someone else lights it.</p>
+      <label>Your firefly's name
+        <input id="name" maxlength="24" placeholder="e.g. Anto" autocomplete="nickname" />
+      </label>
+      <label>Your glow
+        <div id="colors" class="swatches"></div>
+      </label>
+      <details>
+        <summary>Island location</summary>
+        <label>Realm host
+          <input id="host" maxlength="64" spellcheck="false" />
+        </label>
+      </details>
+      <button id="join">Fly to the island</button>
+    </section>
+
+    <section id="play" hidden>
+      <canvas id="island"></canvas>
+      <div id="hud">
+        <div id="mylamp">Your lamp is dark</div>
+        <div id="fiction"></div>
+        <div id="log"></div>
+        <div class="row">
+          <button id="share">Share the island</button>
+          <button id="leave" class="ghost">Leave</button>
+        </div>
+      </div>
+      <div id="qrmodal" hidden>
+        <div class="qrcard">
+          <h2>Bring a firefly</h2>
+          <img id="qrimg" alt="QR code for this island" />
+          <div id="qrurl"></div>
+          <div class="row">
+            <button id="qrcopy">Copy link</button>
+            <button id="qrclose" class="ghost">Close</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <footer><span id="ffVersion">FF v9</span> · a CNS/CP toy — every lamp is a governed connection</footer>
+  <script src="qrcode.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
