@@ -1,33 +1,35 @@
 #!/usr/bin/env node
-// Island Spirit — the always-on host node for Firefly Island (FF v2).
-// Runs anywhere with Node 18+ and network reach to the realm.
+// Island Spirit v3 — the always-on host for the WHOLE ARCHIPELAGO.
+// The spirit now DISCOVERS islands from the realm keys: any context where a
+// firefly has declared a padi.light lamp gets a beacon and a greeter. Mint an
+// island by sharing a link; the spirit senses it and lights the lighthouse.
 //
-//   provider of cp:padi.game.beacon   level/pattern PROPAGATE to all players;
-//                                     `granted` written ADDRESSED per connection
-//   consumer of cp:padi.game.presence greets each firefly with an ADDRESSED
-//                                     `welcome` on their connection
+//   provider of cp:padi.game.beacon   per island: level/pattern PROPAGATE;
+//                                     `granted` acks ADDRESSED per connection
+//   consumer of cp:padi.game.presence per island: ADDRESSED `welcome` greetings
 //
 //   npm i ws && node island-spirit.js
-//   env: ARETE_HOST   (default anto.aretehosting.com)
-//        ISLAND_CTX   (default FireflyIslandPhase1Ctx — the real island)
-//        FF_INSECURE=1 (self-signed TLS)
-//        DECAY_MS     (default 45000 — one level point per interval)
-//        FEED_BONUS   (default 3 — level points per feed tap)
+//   env: ARETE_HOST   (default bali.aretehosting.com)
+//        ISLAND_CTX   (always tended even before anyone arrives;
+//                      default FireflyIslandPhase1Ctx)
+//        AUTO=0       disable island auto-discovery (tend ISLAND_CTX only)
+//        FF_INSECURE=1 (self-signed TLS), DECAY_MS (45000), FEED_BONUS (3)
 //
-// Semantics: players write a MONOTONIC tap-count into `feed` (addressed);
-// the spirit banks the delta, acks by mirroring the count into `granted`.
-// On restart the spirit baselines to current counts (missed taps are the
-// fireflies' gift to the night). No .watch(); keys derived on update.
+// Ported invariants: value-wiper guard per capability; feed baseline is the
+// realm-persisted `granted` per connection (stateless restarts); registration
+// is serialized — re-register only on reconnect (the bali race, 2026-07-25).
 
 import WebSocket from 'ws';
 
 const HOST = process.env.ARETE_HOST || 'bali.aretehosting.com';
-const CTX = process.env.ISLAND_CTX || 'FireflyIslandPhase1Ctx';
+const HOME_CTX = process.env.ISLAND_CTX || 'FireflyIslandPhase1Ctx';
+const AUTO = process.env.AUTO !== '0';
 const CTX_NAME = 'Firefly Island';
 const DECAY_MS = Number(process.env.DECAY_MS || 45000);
 const FEED_BONUS = Number(process.env.FEED_BONUS || 3);
 const P_BEACON = 'padi.game.beacon';
 const P_PRES = 'padi.game.presence';
+const P_LIGHT = 'padi.light';
 if (process.env.FF_INSECURE === '1') process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 // Fixed identity — same registration every run, no ghosts.
@@ -72,7 +74,6 @@ class Client {
       setTimeout(() => this.#open(), 5000);
     });
     this.ws.on('error', (e) => log(`socket error: ${e.message}`));
-    // browsers can't keepalive; Node can — protect long idle nights
     clearInterval(this.pinger);
     this.pinger = setInterval(() => { try { this.ws.ping(); } catch (_) {} }, 30000);
   }
@@ -91,26 +92,52 @@ class Client {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const beaconBase = `cns/${SPIRIT.sys}/nodes/${SPIRIT.node}/contexts/${CTX}/provider/${P_BEACON}`;
-const presBase = `cns/${SPIRIT.sys}/nodes/${SPIRIT.node}/contexts/${CTX}/consumer/${P_PRES}`;
+const beaconBase = (ctx) => `cns/${SPIRIT.sys}/nodes/${SPIRIT.node}/contexts/${ctx}/provider/${P_BEACON}`;
+const presBase = (ctx) => `cns/${SPIRIT.sys}/nodes/${SPIRIT.node}/contexts/${ctx}/consumer/${P_PRES}`;
 
-async function register(c) {
+// islands = contexts where at least one firefly lamp is declared (any system)
+function discoverIslands(c) {
+  const found = new Set([HOME_CTX]);
+  if (!AUTO) return found;
+  const re = new RegExp(`^cns/[^/]+/nodes/[^/]+/contexts/([^/]+)/consumer/${P_LIGHT.replace(/\./g, '\\.')}/version$`);
+  for (const k in c.keys) {
+    const m = k.match(re);
+    if (m) found.add(m[1]);
+  }
+  return found;
+}
+
+async function registerBase(c) {
   await c.command('systems', SPIRIT.sys, 'Firefly Island Spirit');
   await c.command('nodes', SPIRIT.sys, SPIRIT.node, SPIRIT.name, false, null);
-  await c.command('contexts', SPIRIT.sys, SPIRIT.node, CTX, CTX_NAME);
+}
+
+// The founders christen an island; the spirit canonizes their name. Look at
+// what OTHER participants registered this context as, adopt the first real
+// name found, else the default. The spirit's ctx-name key then becomes the
+// display name every client shows.
+function adoptName(c, ctx) {
+  const re = new RegExp(`^cns/([^/]+)/nodes/[^/]+/contexts/${ctx.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/name$`);
+  for (const k in c.keys) {
+    const m = k.match(re);
+    if (m && m[1] !== SPIRIT.sys && c.keys[k]) return String(c.keys[k]);
+  }
+  return CTX_NAME;
+}
+
+// declare the spirit's presence on one island (wiper-guarded, serialized)
+async function tendIsland(c, ctx) {
+  await c.command('contexts', SPIRIT.sys, SPIRIT.node, ctx, adoptName(c, ctx));
   for (const [role, profile, cmd] of [['provider', P_BEACON, 'providers'], ['consumer', P_PRES, 'consumers']]) {
-    const base = `cns/${SPIRIT.sys}/nodes/${SPIRIT.node}/contexts/${CTX}/${role}/${profile}`;
-    if (c.keys[base + '/version'] !== undefined) {
-      log(`${role} ${profile} already declared — skipping (wiper guard)`);
-      continue;
-    }
-    await c.command(cmd, SPIRIT.sys, SPIRIT.node, CTX, profile);
+    const base = `cns/${SPIRIT.sys}/nodes/${SPIRIT.node}/contexts/${ctx}/${role}/${profile}`;
+    if (c.keys[base + '/version'] !== undefined) continue; // re-declaring WIPES values
+    await c.command(cmd, SPIRIT.sys, SPIRIT.node, ctx, profile);
   }
-  if (c.keys[`${beaconBase}/properties/level`] === undefined) {
-    await c.put(`${beaconBase}/properties/level`, '80');
+  if (c.keys[`${beaconBase(ctx)}/properties/level`] === undefined) {
+    await c.put(`${beaconBase(ctx)}/properties/level`, '80');
   }
-  if (c.keys[`${beaconBase}/properties/pattern`] === undefined) {
-    await c.put(`${beaconBase}/properties/pattern`, 'calm');
+  if (c.keys[`${beaconBase(ctx)}/properties/pattern`] === undefined) {
+    await c.put(`${beaconBase(ctx)}/properties/pattern`, 'calm');
   }
 }
 
@@ -127,75 +154,99 @@ function conns(c, base, peerSide) {
 }
 
 (async () => {
-  log(`Island Spirit waking — realm wss://${HOST}:443, island ctx ${CTX}`);
+  log(`Island Spirit v3 waking — realm wss://${HOST}:443, home ctx ${HOME_CTX}, auto-discovery ${AUTO ? 'ON' : 'off'}`);
   const c = new Client(`wss://${HOST}:443`);
-  // Re-register ONLY on reconnect — never concurrently with the initial
-  // registration below (two interleaved register() runs corrupt the
-  // registration server-side; bitten on bali 2026-07-25).
+  const islands = new Map(); // ctx -> { level, welcomed:Set, lastDecay }
   let registeredOnce = false;
+  let busy = false; // serialize ALL registration work (the bali race lesson)
+
   c.onopen = () => {
     if (!registeredOnce) return;
-    register(c).then(() => log('re-registered after reconnect')).catch((e) => log(`re-register failed: ${e.message}`));
+    (async () => {
+      while (busy) await sleep(200);
+      busy = true;
+      try {
+        await registerBase(c);
+        for (const ctx of islands.keys()) await tendIsland(c, ctx);
+        log('re-registered after reconnect');
+      } catch (e) { log(`re-register failed: ${e.message}`); }
+      finally { busy = false; }
+    })();
   };
 
   const t0 = Date.now();
   while (c.updates === 0 && Date.now() - t0 < 20000) await sleep(100);
   if (c.updates === 0) { log('could not reach the realm'); process.exit(1); }
-  await register(c);
+  busy = true;
+  await registerBase(c);
+  busy = false;
   registeredOnce = true;
-  log('registered. The beacon is lit.');
-
-  let level = Math.max(5, Math.min(100, parseInt(c.keys[`${beaconBase}/properties/level`] || '80', 10) || 80));
-  const welcomed = new Set();
-  let lastDecay = Date.now();
+  log('registered. Scanning the archipelago…');
 
   for (;;) {
     await sleep(2000); // snappy acks — a feed should feel answered
-    if (!c.isOpen() || c.updates === 0) continue;
+    if (!c.isOpen() || c.updates === 0 || busy) continue;
 
-    // ---- feeds (beacon provider side: peer writes `feed` addressed to us).
-    // The banked baseline is `granted` — persisted ON THE REALM per connection,
-    // so restarts are lossless and the spirit itself holds no state.
-    const feedConns = conns(c, beaconBase, 'consumer');
-    for (const connId in feedConns) {
-      const n = parseInt(c.keys[`${beaconBase}/connections/${connId}/properties/feed`] || '0', 10) || 0;
-      const banked = parseInt(c.keys[`${beaconBase}/connections/${connId}/properties/granted`] || '0', 10) || 0;
-      const delta = n - banked;
-      if (delta > 0) {
-        level = Math.min(100, level + delta * FEED_BONUS);
-        await c.put(`${beaconBase}/connections/${connId}/properties/granted`, String(n)).catch(() => {});
-        log(`fed +${delta} tap(s) via ${connId} — level ${level}`);
-      } else if (n && delta < 0) {
-        // player reset their count (fresh device/localStorage) — re-sync
-        await c.put(`${beaconBase}/connections/${connId}/properties/granted`, String(n)).catch(() => {});
-        log(`re-synced granted to ${n} on ${connId}`);
+    // ---- discover new islands and light their beacons
+    for (const ctx of discoverIslands(c)) {
+      if (islands.has(ctx)) continue;
+      busy = true;
+      try {
+        await tendIsland(c, ctx);
+        islands.set(ctx, {
+          level: Math.max(5, Math.min(100, parseInt(c.keys[`${beaconBase(ctx)}/properties/level`] || '80', 10) || 80)),
+          welcomed: new Set(),
+          lastDecay: Date.now(),
+        });
+        log(`⛯ new island discovered — beacon lit on ${ctx}`);
+      } catch (e) { log(`could not tend ${ctx}: ${e.message}`); }
+      finally { busy = false; }
+    }
+
+    for (const [ctx, isle] of islands) {
+      const bBase = beaconBase(ctx), pBase = presBase(ctx);
+
+      // ---- feeds: baseline is realm-persisted `granted` (stateless restarts)
+      const feedConns = conns(c, bBase, 'consumer');
+      for (const connId in feedConns) {
+        const n = parseInt(c.keys[`${bBase}/connections/${connId}/properties/feed`] || '0', 10) || 0;
+        const banked = parseInt(c.keys[`${bBase}/connections/${connId}/properties/granted`] || '0', 10) || 0;
+        const delta = n - banked;
+        if (delta > 0) {
+          isle.level = Math.min(100, isle.level + delta * FEED_BONUS);
+          await c.put(`${bBase}/connections/${connId}/properties/granted`, String(n)).catch(() => {});
+          log(`[${ctx}] fed +${delta} tap(s) — level ${isle.level}`);
+        } else if (n && delta < 0) {
+          await c.put(`${bBase}/connections/${connId}/properties/granted`, String(n)).catch(() => {});
+          log(`[${ctx}] re-synced granted to ${n}`);
+        }
       }
-    }
 
-    // ---- welcomes (presence consumer side: greet each firefly ADDRESSED)
-    const presConns = conns(c, presBase, 'provider');
-    for (const connId in presConns) {
-      if (welcomed.has(connId)) continue;
-      const p = presConns[connId]; // [ , sys, 'nodes', node, ...]
-      const peerPres = `cns/${p[1]}/nodes/${p[3]}/contexts/${CTX}/provider/${P_PRES}/properties/name`;
-      const name = c.keys[peerPres] || c.keys[`cns/${p[1]}/nodes/${p[3]}/name`] || 'little light';
-      await c.put(`${presBase}/connections/${connId}/properties/welcome`, `Welcome to the island, ${name}!`).catch(() => {});
-      welcomed.add(connId);
-      log(`welcomed ${name} (${connId})`);
-    }
+      // ---- welcomes (ADDRESSED per firefly)
+      const presConns = conns(c, pBase, 'provider');
+      for (const connId in presConns) {
+        if (isle.welcomed.has(connId)) continue;
+        const p = presConns[connId];
+        const peerPres = `cns/${p[1]}/nodes/${p[3]}/contexts/${ctx}/provider/${P_PRES}/properties/name`;
+        const name = c.keys[peerPres] || c.keys[`cns/${p[1]}/nodes/${p[3]}/name`] || 'little light';
+        await c.put(`${pBase}/connections/${connId}/properties/welcome`, `Welcome to the island, ${name}!`).catch(() => {});
+        isle.welcomed.add(connId);
+        log(`[${ctx}] welcomed ${name}`);
+      }
 
-    // ---- decay + publish
-    if (Date.now() - lastDecay >= DECAY_MS) {
-      lastDecay = Date.now();
-      if (level > 5) level -= 1;
-    }
-    const wantPattern = level >= 95 ? 'festival' : 'calm';
-    if (c.keys[`${beaconBase}/properties/level`] !== String(level)) {
-      await c.put(`${beaconBase}/properties/level`, String(level)).catch(() => {});
-    }
-    if (c.keys[`${beaconBase}/properties/pattern`] !== wantPattern) {
-      await c.put(`${beaconBase}/properties/pattern`, wantPattern).catch(() => {});
-      log(`pattern -> ${wantPattern}`);
+      // ---- decay + publish
+      if (Date.now() - isle.lastDecay >= DECAY_MS) {
+        isle.lastDecay = Date.now();
+        if (isle.level > 5) isle.level -= 1;
+      }
+      const wantPattern = isle.level >= 95 ? 'festival' : 'calm';
+      if (c.keys[`${bBase}/properties/level`] !== String(isle.level)) {
+        await c.put(`${bBase}/properties/level`, String(isle.level)).catch(() => {});
+      }
+      if (c.keys[`${bBase}/properties/pattern`] !== wantPattern) {
+        await c.put(`${bBase}/properties/pattern`, wantPattern).catch(() => {});
+        log(`[${ctx}] pattern -> ${wantPattern}`);
+      }
     }
   }
 })();

@@ -73,7 +73,7 @@ const spiritBeacon = `cns/${SPIRIT_SYS}/nodes/${SPIRIT_NODE}/contexts/${CTX}/pro
   console.log(`Spirit exit test — realm wss://${HOST}:443, ctx ${CTX}`);
   const dir = path.dirname(fileURLToPath(import.meta.url));
   const spirit = spawn('node', [path.join(dir, '../spirit/island-spirit.js')], {
-    env: { ...process.env, ISLAND_CTX: CTX, DECAY_MS: '8000' },
+    env: { ...process.env, ISLAND_CTX: CTX, DECAY_MS: '8000', AUTO: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd: path.join(dir, '../spirit'),
   });

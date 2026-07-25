@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v29';
+const FF_VERSION = 'FF v30';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -158,6 +158,8 @@ const game = new (class extends Emitter {
   lastError = null;
   me = { ...identity(), name: '', color: COLORS[0], host: DEFAULT_HOST };
   ctxId = ISLAND_CTX_ID;
+  ctxName = ISLAND_CTX_NAME; // what I register (founder may christen via ?name=)
+  islandName = null;         // canonical display name = the SPIRIT's ctx name
   fireflies = [];        // [{key, sysId, nodeId, name, color, lampOn, isMe, connId, litByMe}]
   myLampOn = false;
   litBy = [];
@@ -191,6 +193,7 @@ const game = new (class extends Emitter {
 
     const url = new URLSearchParams(location.search);
     this.ctxId = cleanHost(url.get('island')) || ISLAND_CTX_ID;
+    this.ctxName = clean(url.get('name')) || ISLAND_CTX_NAME;
 
     if (this.client) { try { this.client.close(); } catch (_) {} this.client = null; }
     this.#joined = false; this.#declared = false;
@@ -238,7 +241,7 @@ const game = new (class extends Emitter {
     const { systemId, nodeId, name } = this.me;
     await c.command('systems', systemId, `Firefly (${name})`);
     await c.command('nodes', systemId, nodeId, name, false, null);
-    await c.command('contexts', systemId, nodeId, this.ctxId, ISLAND_CTX_NAME);
+    await c.command('contexts', systemId, nodeId, this.ctxId, this.ctxName);
     const caps = [
       ['provider', P_LIGHT], ['consumer', P_LIGHT],   // switch + lamp
       ['provider', P_PRES],                            // firefly announces itself
@@ -367,6 +370,13 @@ const game = new (class extends Emitter {
     for (const k in keys) {
       const m = k.match(beaconConnRe);
       if (m) { beaconConn = m[1]; break; }
+    }
+    // canonical island name = the spirit's context-name key on the realm
+    if (beaconBase) {
+      const parts = beaconBase.split('/'); // [cns, sys, nodes, node, contexts, ctx, ...]
+      this.islandName = keys[`cns/${parts[1]}/nodes/${parts[3]}/contexts/${parts[5]}/name`] || null;
+    } else {
+      this.islandName = null;
     }
     this.beacon = {
       present: !!beaconBase,
@@ -516,6 +526,8 @@ const game = new (class extends Emitter {
     u.search = '';
     u.searchParams.set('host', this.me.host);
     u.searchParams.set('island', this.ctxId);
+    const n = this.islandName || this.ctxName;
+    if (n && n !== ISLAND_CTX_NAME) u.searchParams.set('name', n);
     return u.toString();
   }
 
@@ -530,6 +542,7 @@ const game = new (class extends Emitter {
   // switching islands. Baselines reset to null so the next island baselines
   // silently (no replayed animations from its history).
   #resetWorld() {
+    this.islandName = null;
     this.fireflies = [];
     this.myLampOn = false;
     this.litBy = [];
@@ -842,10 +855,10 @@ function refresh() {
   }
   st.classList.toggle('lit', lit);
   st.classList.toggle('error', game.state === 'error');
-  // where am I: the island's full address (realm host, + ctx when custom)
-  $('#where').textContent = joined
-    ? game.me.host + (game.ctxId !== ISLAND_CTX_ID ? ` · ${game.ctxId}` : '')
-    : '';
+  // where am I: friendly island name (spirit's ctx name) over the raw address
+  $('#where').textContent = !joined ? ''
+    : game.islandName ? `${game.islandName} · ${game.me.host}`
+    : game.me.host + (game.ctxId !== ISLAND_CTX_ID ? ` · ${game.ctxId}` : '');
 }
 
 function showQr() {
