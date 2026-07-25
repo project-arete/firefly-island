@@ -17,7 +17,7 @@
 'use strict';
 
 // ------------------------------------------------------------------ consts
-const FF_VERSION = 'FF v26';
+const FF_VERSION = 'FF v27';
 // Reach: how far your glow extends, in normalized (0-1) canvas units.
 // Light received is power to give: every firefly holding your lamp lit
 // extends your reach. The base must stay workable alone (cold-start guard),
@@ -821,6 +821,10 @@ function refresh() {
   }
   st.classList.toggle('lit', lit);
   st.classList.toggle('error', game.state === 'error');
+  // where am I: the island's full address (realm host, + ctx when custom)
+  $('#where').textContent = joined
+    ? game.me.host + (game.ctxId !== ISLAND_CTX_ID ? ` · ${game.ctxId}` : '')
+    : '';
 }
 
 function showQr() {
